@@ -1,0 +1,10 @@
+node_modules
+
+/src/generated/prisma
+
+# Secrets (DB password, JWT secrets, API keys) — never commit
+.env
+.env.*
+
+# Archives of the project can carry a copy of .env (ShiftBuddy-backend.zip does)
+*.zip

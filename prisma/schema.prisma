@@ -1,0 +1,188 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String    @id @default(uuid())
+  email               String    @unique
+  name                String
+  password            String?
+  googleId            String?   @unique
+  avatarUrl           String?
+  isEmailVerified     Boolean   @default(false)
+  appleId         String?  @unique
+  plan                Plan      @default(FREE)
+  taxDeductionPercent  Float  @default(13)
+  // Ghar ka address — travel time home → job (aur wapas) nikalne ke liye
+  homeAddress         String?
+  homeLatitude        Float?
+  homeLongitude       Float?
+  // Kaise travel karta hai — travel-time conflicts aur route planning isi se chalte hain
+  commuteMode         CommuteMode @default(TRANSIT)
+  // How early to aim to arrive at a shift (0 = right on time) — leave-by times and routes use it
+  arrivalBufferMinutes Int        @default(10)
+  // Old single-session token. Sessions live in the Session table now; this only lets
+  // phones signed in before 2026-10-06 move over on their next refresh without a
+  // re-login. Drop the column once those tokens have expired (30 days).
+  refreshToken        String?
+  resetPasswordCode   String?
+  resetPasswordExpiry DateTime?
+  resetPasswordAttempts Int     @default(0)
+  // Email verification — 6-digit code, stored hashed, short-lived, limited attempts
+  emailVerificationCode     String?
+  emailVerificationExpiry   DateTime?
+  emailVerificationAttempts Int       @default(0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  jobs     Job[]
+  shifts   Shift[]
+  sessions Session[]
+  timeEntries TimeEntry[]
+
+  sharesGiven   ShareGrant[] @relation("SharesGiven")
+  sharesReceived ShareGrant[] @relation("SharesReceived")
+
+  @@map("users")
+}
+
+// One signed-in device or browser. Each has its own refresh token (stored hashed,
+// replaced on every refresh), so signing in on the web doesn't sign the phone out
+// and signing out of one place leaves the others alone.
+model Session {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokenHash String   @unique
+  userAgent        String? // which device/browser, for a future "where you're signed in" list
+  expiresAt        DateTime
+  lastUsedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+// "Let this person see my shifts" — for a week, a month, or until revoked.
+// inviteEmail is always set; granteeId is filled once that email has a
+// verified account (immediately if it already exists).
+model ShareGrant {
+  id          String    @id @default(uuid())
+  ownerId     String
+  owner       User      @relation("SharesGiven", fields: [ownerId], references: [id], onDelete: Cascade)
+  granteeId   String?
+  grantee     User?     @relation("SharesReceived", fields: [granteeId], references: [id], onDelete: Cascade)
+  inviteEmail String
+  expiresAt   DateTime? // null = until revoked
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([ownerId])
+  @@index([granteeId])
+  @@index([inviteEmail])
+  @@map("share_grants")
+}
+
+model Job {
+  id String @id @default(uuid())
+
+  title       String // role/position, e.g. "Retail Sales Supervisor"
+  companyName String // e.g. "Boathouse"
+  location    String? // address — future me maps/travel-time ke liye
+  latitude    Float?
+  longitude   Float?
+  matchKeywords   String?  // comma-separated alternate names, e.g. "Key Holder, BHR, 070" — OCR auto-matching ke liye
+  color       String  @default("#6366F1") // calendar me visually distinguish karne ke liye
+  hourlyRate  Float? 
+  // Pay period: how often, and any one payday. A period is the one or two full
+  // weeks (Sunday–Saturday) before the week a payday falls in.
+  payFrequency PayFrequency @default(BIWEEKLY)
+  payday      String? // "YYYY-MM-DD" — a calendar day, no time zone
+  isActive    Boolean @default(true)
+
+  // Relation: ye Job kis User ka hai
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shifts      Shift[]
+  timeEntries TimeEntry[]
+
+  @@index([userId])
+  @@map("jobs")
+}
+
+model Shift {
+  id String @id @default(uuid())
+
+  startTime DateTime
+  endTime   DateTime
+  notes     String?
+
+  // Relation: kis Job ki shift hai
+  jobId String
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  // Relation: kis User ki shift hai (denormalized — direct query/security ke liye)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  timeEntries TimeEntry[]
+
+  // Nearly every shift query is "this user's shifts in a time range"
+  @@index([userId, startTime])
+  @@index([jobId])
+  @@map("shifts")
+}
+
+// What was actually worked: clocked in and out by the user (or typed in later).
+// The schedule (Shift) says what was planned; pay is counted from these.
+model TimeEntry {
+  id String @id @default(uuid())
+
+  clockIn      DateTime
+  clockOut     DateTime? // null = still on the clock
+  breakMinutes Int       @default(0) // unpaid; filled in at clock-out, editable
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId  String
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  // The scheduled shift this was for, when there was one; deleting the shift keeps the hours
+  shiftId String?
+  shift   Shift?  @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, clockIn])
+  @@index([jobId, clockIn])
+  @@map("time_entries")
+}
+
+enum PayFrequency {
+  WEEKLY
+  BIWEEKLY
+}
+
+enum CommuteMode {
+  TRANSIT
+  DRIVING
+}
+
+enum Plan {
+  FREE
+  PRO
+  TESTER
+}
