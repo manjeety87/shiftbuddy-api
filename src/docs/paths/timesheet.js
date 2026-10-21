@@ -38,6 +38,18 @@ module.exports = {
             responses: { ...ok('The week', ref('WeekTimesheet')), ...errors.validation },
         }),
     },
+    '/timesheet/summary': {
+        get: op({
+            tag, query: v.summaryQuerySchema,
+            summary: 'Hours and pay per job for a week, two weeks, a month or all time',
+            description:
+                'Every job together: `byJob` (most hours first) and `totals` with paid minutes, entry count, `grossPay` (jobs with an hourly ' +
+                'rate only — `missingRates` says when some hours aren’t in it) and `estimatedPay` (gross less the user’s `taxDeductionPercent`). ' +
+                'Weeks run Sunday–Saturday; `twoWeeks` is this week and last; `month` is the calendar month. `range=all` covers everything ' +
+                'and sends no `entries` (its `period.start` is the first day with hours).',
+            responses: { ...ok('The summary', { type: 'object' }), ...errors.validation },
+        }),
+    },
     '/timesheet/current': {
         get: op({
             tag,

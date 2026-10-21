@@ -97,6 +97,34 @@ const weekOn = (date, timeZone, offset = 0) => {
     return { start, end: start.plus({ days: 7 }) };
 };
 
+/** The ranges the hours summary can show. `all` is everything ever recorded. */
+const SUMMARY_RANGES = ['week', 'twoWeeks', 'month', 'all'];
+
+/**
+ * The days a summary covers, in `timeZone`, or null for `all`. Weeks run Sunday
+ * to Saturday like the calendar; `twoWeeks` is this week and the one before (the
+ * usual biweekly stretch); `month` is the calendar month. `offset` steps back by
+ * whole ranges (-1 = the one before).
+ */
+const summaryRangeOn = (range, date, timeZone, offset = 0) => {
+    const day = DateTime.fromJSDate(date, { zone: timeZone });
+    if (range === 'week') return weekOn(date, timeZone, offset);
+    if (range === 'twoWeeks') {
+        const start = weekStart(day).minus({ weeks: 1 }).plus({ weeks: 2 * offset });
+        return { start, end: start.plus({ days: 14 }) };
+    }
+    if (range === 'month') {
+        const start = day.startOf('month').plus({ months: offset });
+        return { start, end: start.plus({ months: 1 }) };
+    }
+    return null;
+};
+
+const round2 = (value) => Math.round(value * 100) / 100;
+
+/** Gross pay less the user's own deduction estimate — the same estimate Pay Summary uses. null without a gross figure. */
+const estimatedPayOf = (grossPay, taxPercent) => (grossPay == null ? null : round2(grossPay * (1 - taxPercent / 100)));
+
 /**
  * Entries from several jobs (each with its `job`) → the same rows and totals as
  * summarizeEntries, plus a line per job. Pay is only added up for jobs that have
@@ -127,4 +155,4 @@ const summarizeAcrossJobs = (entries) => {
     };
 };
 
-module.exports = { CLOCK_IN_EARLY_MINUTES, clockInWindow, weekOn, summarizeAcrossJobs, BREAK_AFTER_MINUTES, BREAK_MINUTES, autoBreakMinutes, paidMinutes, payPeriodOn, summarizeEntries };
+module.exports = { CLOCK_IN_EARLY_MINUTES, SUMMARY_RANGES, clockInWindow, weekOn, summaryRangeOn, estimatedPayOf, summarizeAcrossJobs, BREAK_AFTER_MINUTES, BREAK_MINUTES, autoBreakMinutes, paidMinutes, payPeriodOn, summarizeEntries };

@@ -27,6 +27,11 @@ const getWeekTimesheet = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, timesheet, 'Week fetched'));
 });
 
+const getSummary = asyncHandler(async (req, res) => {
+    const summary = await timesheetService.getSummary(req.user.id, req.validated.query);
+    res.status(200).json(new ApiResponse(200, summary, 'Hours summary fetched'));
+});
+
 const createEntry = asyncHandler(async (req, res) => {
     const entry = await timesheetService.createEntry(req.user.id, req.body);
     res.status(201).json(new ApiResponse(201, entry, 'Time entry added'));
@@ -47,4 +52,4 @@ const deleteEntry = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, null, 'Time entry deleted'));
 });
 
-module.exports = { getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry };
+module.exports = { getSummary, getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry };

@@ -1,6 +1,9 @@
 const { z } = require('zod');
 const { uuid, timeZone } = require('./common.validation');
 
+// Same list as domain/timesheet.js SUMMARY_RANGES (validation imports only zod/luxon)
+const SUMMARY_RANGES = ['week', 'twoWeeks', 'month', 'all'];
+
 const MAX_BREAK_MINUTES = 240;
 
 // POST /timesheet/clock-in — always for a scheduled shift (hours without one are added by hand)
@@ -40,4 +43,11 @@ const weekQuerySchema = z.object({
     timeZone: timeZone(),
 });
 
-module.exports = { createEntrySchema, weekQuerySchema, clockInSchema, updateEntrySchema, timesheetQuerySchema };
+// GET /timesheet/summary?range=&offset=&timeZone= — every job's hours and pay for a stretch of time
+const summaryQuerySchema = z.object({
+    range: z.enum(SUMMARY_RANGES).default('week').describe('week (Sun–Sat), twoWeeks (this week and last), month (calendar month) or all (everything)'),
+    offset: z.coerce.number().int().min(-520).max(0).default(0).describe('0 = the range today is in, -1 = the one before; ignored for all'),
+    timeZone: timeZone(),
+});
+
+module.exports = { createEntrySchema, summaryQuerySchema, weekQuerySchema, clockInSchema, updateEntrySchema, timesheetQuerySchema };

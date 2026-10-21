@@ -40,3 +40,30 @@ test('all-jobs summary: a line per job, most hours first; pay only where there i
     assert.equal(entries.length, 4);
     assert.deepEqual(summarizeAcrossJobs([]).totals, { entryCount: 0, paidMinutes: 0, breakMinutes: 0, grossPay: null, missingRates: false });
 });
+
+test('summary ranges: Sun–Sat week, this week and last, calendar month, all', () => {
+    const { summaryRangeOn, SUMMARY_RANGES } = require('../src/domain/timesheet');
+    const { summaryQuerySchema } = require('../src/validation/timesheet.validation');
+    const zone = 'America/Toronto';
+    const tuesday = DateTime.fromISO('2026-10-20T12:00', { zone }).toJSDate();
+    const days = (span) => `${span.start.toISODate()}..${span.end.minus({ days: 1 }).toISODate()}`;
+
+    assert.equal(days(summaryRangeOn('week', tuesday, zone)), '2026-10-18..2026-10-24');
+    assert.equal(days(summaryRangeOn('week', tuesday, zone, -1)), '2026-10-11..2026-10-17');
+    assert.equal(days(summaryRangeOn('twoWeeks', tuesday, zone)), '2026-10-11..2026-10-24');
+    assert.equal(days(summaryRangeOn('twoWeeks', tuesday, zone, -1)), '2026-09-27..2026-10-10');
+    assert.equal(days(summaryRangeOn('month', tuesday, zone)), '2026-10-01..2026-10-31');
+    assert.equal(days(summaryRangeOn('month', tuesday, zone, -1)), '2026-09-01..2026-09-30');
+    assert.equal(summaryRangeOn('all', tuesday, zone), null);
+    // The validation list (zod-only file) must match the domain's
+    for (const range of SUMMARY_RANGES) assert.ok(summaryQuerySchema.safeParse({ range, timeZone: zone }).success, range);
+    assert.ok(!summaryQuerySchema.safeParse({ range: 'year', timeZone: zone }).success);
+});
+
+test('estimated pay takes the user’s deduction off gross, and needs a gross figure', () => {
+    const { estimatedPayOf } = require('../src/domain/timesheet');
+    assert.equal(estimatedPayOf(100, 13), 87);
+    assert.equal(estimatedPayOf(123.45, 13), 107.4);
+    assert.equal(estimatedPayOf(null, 13), null);
+    assert.equal(estimatedPayOf(50, 0), 50);
+});

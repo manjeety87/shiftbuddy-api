@@ -1,8 +1,9 @@
+const { DateTime } = require('luxon');
 const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
 const { withUserLock } = require('../utils/withUserLock');
 const { MAX_SHIFT_HOURS } = require('../constants/shifts');
-const { autoBreakMinutes, clockInWindow, payPeriodOn, summarizeAcrossJobs, summarizeEntries, weekOn } = require('../domain/timesheet');
+const { autoBreakMinutes, clockInWindow, payPeriodOn, summarizeAcrossJobs, summarizeEntries, weekOn, summaryRangeOn, estimatedPayOf } = require('../domain/timesheet');
 
 // The timesheet: clocking in and out, adding or fixing an entry by hand, and the
 // entries for a pay period (one job) or a week (all jobs) with what they add up to.
@@ -136,10 +137,14 @@ const getTimesheet = async (userId, { jobId, offset, timeZone }) => {
         orderBy: { clockIn: 'desc' },
     });
 
+    const { taxDeductionPercent } = await prisma.user.findUnique({ where: { id: userId }, select: { taxDeductionPercent: true } });
+    const summary = summarizeEntries(entries, job.hourlyRate);
     return {
         job: jobSummary(job),
         period: { ...daysOf(period), payday: period.payday?.toISODate() ?? null, offset },
-        ...summarizeEntries(entries, job.hourlyRate),
+        entries: summary.entries,
+        totals: { ...summary.totals, estimatedPay: estimatedPayOf(summary.totals.grossPay, taxDeductionPercent) },
+        taxDeductionPercent,
     };
 };
 
@@ -165,4 +170,35 @@ const getWeekTimesheet = async (userId, { offset, timeZone }) => {
     };
 };
 
-module.exports = { getCurrentEntry, clockIn, clockOut, createEntry, getEntry, updateEntry, deleteEntry, getTimesheet, getWeekTimesheet };
+/**
+ * Every job's hours and pay for a week, two weeks, a month or all time: "how
+ * much have I worked, and earned, at each job?". Per job and in total: paid
+ * time, entries, gross pay (jobs with an hourly rate) and the estimate after the
+ * user's own deduction percentage. The entries come too, except for `all`, which
+ * is the totals only — a whole history is too long to send for a summary.
+ */
+const getSummary = async (userId, { range, offset, timeZone }) => {
+    const span = summaryRangeOn(range, new Date(), timeZone, offset);
+    const [user, entries] = await Promise.all([
+        prisma.user.findUnique({ where: { id: userId }, select: { taxDeductionPercent: true } }),
+        prisma.timeEntry.findMany({
+            where: { userId, ...(span && { clockIn: { gte: span.start.toJSDate(), lt: span.end.toJSDate() } }) },
+            include: withJob,
+            orderBy: { clockIn: 'desc' },
+        }),
+    ]);
+
+    const tax = user.taxDeductionPercent;
+    const summary = summarizeAcrossJobs(entries);
+    const firstDay = entries.length ? DateTime.fromJSDate(entries[entries.length - 1].clockIn, { zone: timeZone }).toISODate() : null;
+    return {
+        range,
+        period: span ? { ...daysOf(span), offset } : { start: firstDay, end: null, offset: 0 },
+        entries: range === 'all' ? [] : summary.entries,
+        byJob: summary.byJob.map(({ job, ...totals }) => ({ job: jobSummary(job), ...totals, estimatedPay: estimatedPayOf(totals.grossPay, tax) })),
+        totals: { ...summary.totals, estimatedPay: estimatedPayOf(summary.totals.grossPay, tax) },
+        taxDeductionPercent: tax,
+    };
+};
+
+module.exports = { getCurrentEntry, clockIn, clockOut, createEntry, getEntry, updateEntry, deleteEntry, getTimesheet, getWeekTimesheet, getSummary };
