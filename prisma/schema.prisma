@@ -37,6 +37,10 @@ model User {
   emailVerificationCode     String?
   emailVerificationExpiry   DateTime?
   emailVerificationAttempts Int       @default(0)
+  // Asked to delete the account. From then it is hidden and signed out everywhere;
+  // signing in within the grace period (domain/account.js) offers to restore it,
+  // after that account.service erases it for good.
+  deletionRequestedAt DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
@@ -48,6 +52,7 @@ model User {
   sharesGiven   ShareGrant[] @relation("SharesGiven")
   sharesReceived ShareGrant[] @relation("SharesReceived")
 
+  @@index([deletionRequestedAt])
   @@map("users")
 }
 
@@ -59,7 +64,7 @@ model Session {
   userId           String
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   refreshTokenHash String   @unique
-  userAgent        String? // which device/browser, for a future "where you're signed in" list
+  userAgent        String? // which device/browser — named for the "Where you’re signed in" list
   expiresAt        DateTime
   lastUsedAt       DateTime @default(now())
   createdAt        DateTime @default(now())

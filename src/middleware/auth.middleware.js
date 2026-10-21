@@ -22,16 +22,17 @@ const requireAuth = asyncHandler(async (req, res, next) => {
         throw new ApiError(401, 'Invalid access token');
     }
 
-    // Looked up on every request so a deleted account loses access at once,
-    // not when its token happens to expire.
+    // Looked up on every request so a deleted account — or one waiting to be
+    // deleted — loses access at once, not when its token happens to expire.
     const user = await prisma.user.findUnique({
         where: { id: decoded.userId },
-        select: { id: true, email: true, name: true, avatarUrl: true },
+        select: { id: true, email: true, name: true, avatarUrl: true, deletionRequestedAt: true },
     });
 
-    if (!user) {
+    if (!user || user.deletionRequestedAt) {
         throw new ApiError(401, 'User no longer exists');
     }
+    delete user.deletionRequestedAt;
 
     req.user = user;
     req.sessionId = decoded.sid; // which device this is — "log out" ends only this one

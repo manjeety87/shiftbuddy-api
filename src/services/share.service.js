@@ -29,12 +29,14 @@ const addressedTo = (viewer) => ({
  *
  * - Only an account with a verified email can receive a share. Otherwise anyone
  *   could sign up with a friend's email first and read the schedule meant for them.
- * - The two conditions are joined with AND on purpose: each has its own `OR`,
+ * - An owner who asked to delete their account is hidden at once: their schedule
+ *   stops showing, though the grant comes back if they restore the account.
+ * - The conditions are joined with AND on purpose: two have their own `OR`,
  *   and spreading both into one object silently drops the first (it did — expired
  *   shares stayed readable).
  */
 const viewableGrantWhere = (viewer, extra = {}) =>
-    viewer.isEmailVerified ? { ...extra, AND: [activeWhere(), addressedTo(viewer)] } : null;
+    viewer.isEmailVerified ? { ...extra, AND: [activeWhere(), addressedTo(viewer), { owner: { deletionRequestedAt: null } }] } : null;
 
 const getViewer = async (userId) => {
     const viewer = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, email: true, isEmailVerified: true } });

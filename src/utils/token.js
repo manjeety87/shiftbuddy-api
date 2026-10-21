@@ -19,6 +19,18 @@ const verifyAccessToken = (token) => jwt.verify(token, env.JWT_ACCESS_SECRET, { 
 
 const verifyRefreshToken = (token) => jwt.verify(token, env.JWT_REFRESH_SECRET, { algorithms: [ALGORITHM] });
 
+// Restore token: proves "this person just signed in to an account waiting to be
+// deleted", so the next call can bring it back. Its own key (derived, so no new
+// setting), so it can never pass as an access or refresh token. `rqa` ties it to
+// that one deletion request.
+const RESTORE_EXPIRY = '15m';
+const restoreSecret = () => crypto.createHmac('sha256', env.JWT_REFRESH_SECRET).update('account-restore').digest('hex');
+
+const generateRestoreToken = (user) =>
+    jwt.sign({ userId: user.id, rqa: user.deletionRequestedAt.getTime() }, restoreSecret(), { algorithm: ALGORITHM, expiresIn: RESTORE_EXPIRY });
+
+const verifyRestoreToken = (token) => jwt.verify(token, restoreSecret(), { algorithms: [ALGORITHM] });
+
 /** When a token we just signed stops working — read back from the token so the expiry setting lives in one place. */
 const expiryOf = (token) => new Date(jwt.decode(token).exp * 1000);
 
@@ -31,6 +43,8 @@ module.exports = {
     generateRefreshToken,
     verifyAccessToken,
     verifyRefreshToken,
+    generateRestoreToken,
+    verifyRestoreToken,
     expiryOf,
     hashToken,
 };

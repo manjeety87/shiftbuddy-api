@@ -5,6 +5,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const env = require('./config/env');
 const authRoutes = require('./routes/auth.routes');
+const accountRoutes = require('./routes/account.routes');
 const jobRoutes = require('./routes/job.routes');
 const shiftRoutes = require('./routes/shift.routes');
 const ocrRoutes = require('./routes/ocr.routes');
@@ -54,6 +55,7 @@ if (!env.isProduction || env.API_DOCS) {
 }
 
 app.use('/api/auth', authRoutes);
+app.use('/api/account', accountRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/shifts', shiftRoutes);
 app.use('/api/ocr', ocrRoutes);

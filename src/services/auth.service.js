@@ -5,8 +5,10 @@ const prisma = require('../config/prisma');
 const env = require('../config/env');
 const ApiError = require('../utils/ApiError');
 const { MAX_CODE_ATTEMPTS, generateCode, hashCode, codeExpiry, codeMatches } = require('../utils/oneTimeCode');
-const { sendPasswordResetEmail, sendVerificationEmail } = require('./email.service');
+const { sendPasswordResetEmail, sendVerificationEmail, sendAccountRestoredEmail } = require('./email.service');
 const { startSession, rotateSession, endSession, endAllSessionsQuery } = require('./session.service');
+const { generateRestoreToken, verifyRestoreToken } = require('../utils/token');
+const { purgeDateFor, purgeCutoff } = require('../domain/account');
 
 // Accounts: signing up and in (password, Google, Apple), the profile, email
 // verification and password recovery. Tokens and sessions are session.service's job.
@@ -36,6 +38,24 @@ const toPublicUser = (user) => ({
 
 const signIn = async (user, context) => ({ user: toPublicUser(user), ...(await startSession(user, context)) });
 
+const PENDING_DELETION = 'ACCOUNT_PENDING_DELETION';
+
+/**
+ * An account waiting to be deleted never just signs in. Once the person has
+ * proved it's theirs (password, Google or Apple), the answer says when it will be
+ * erased and carries a short-lived token the client sends to /auth/restore if
+ * they choose to bring it back — restoring is their decision, not a side effect.
+ */
+const refuseWhilePendingDeletion = (user) => {
+    if (!user.deletionRequestedAt) return;
+    throw new ApiError(403, 'This account is set to be deleted. Restore it to keep using it.', {
+        code: PENDING_DELETION,
+        email: user.email,
+        purgeAt: purgeDateFor(user.deletionRequestedAt).toISOString(),
+        restoreToken: generateRestoreToken(user),
+    });
+};
+
 const findUserOrThrow = async (userId) => {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new ApiError(401, 'User no longer exists');
@@ -44,6 +64,9 @@ const findUserOrThrow = async (userId) => {
 
 const registerUser = async ({ name, email, password }, context) => {
     const existingUser = await prisma.user.findUnique({ where: { email } });
+    if (existingUser?.deletionRequestedAt) {
+        throw new ApiError(409, 'This email’s account is set to be deleted. Log in to restore it.', { code: PENDING_DELETION });
+    }
     if (existingUser) {
         throw new ApiError(409, 'An account with this email already exists');
     }
@@ -70,6 +93,7 @@ const loginUser = async ({ email, password }, context) => {
     if (!user) throw noAccount();
     if (!user.password) throw new ApiError(401, 'This account signs in with Google or Apple — use that button', { code: 'SOCIAL_ACCOUNT' });
     if (!(await bcrypt.compare(password, user.password))) throw new ApiError(401, 'Incorrect password', { code: 'WRONG_PASSWORD' });
+    refuseWhilePendingDeletion(user);
 
     return signIn(user, context);
 };
@@ -92,6 +116,7 @@ const signInWithProvider = async ({ email, providerField, providerId, name, avat
         return signIn(user, context);
     }
 
+    refuseWhilePendingDeletion(existing);
     if (existing[providerField] && existing.isEmailVerified) return signIn(existing, context);
 
     // Already linked to this provider = already theirs; only an unlinked, unverified account is taken over
@@ -158,9 +183,29 @@ const refreshAccessToken = async ({ refreshToken }, context) => {
 
 const logoutUser = (userId, sessionId) => endSession(userId, sessionId);
 
-const deleteAccount = async (userId) => {
-    // Jobs, shifts, sessions and shares all cascade from the user row
-    await prisma.user.delete({ where: { id: userId } });
+/** Brings back an account waiting to be deleted, and signs this device in. */
+const restoreAccount = async ({ restoreToken }, context) => {
+    const expired = () => new ApiError(400, 'That took too long — log in again to restore your account', { code: 'RESTORE_EXPIRED' });
+    let decoded;
+    try {
+        decoded = verifyRestoreToken(restoreToken);
+    } catch {
+        throw expired();
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId } });
+    // Already restored (another tab, or a double tap): just sign in
+    if (user && !user.deletionRequestedAt) return signIn(user, context);
+    // A token from an older request, or no account any more
+    if (!user || user.deletionRequestedAt.getTime() !== decoded.rqa) throw expired();
+    if (user.deletionRequestedAt < purgeCutoff()) throw new ApiError(410, 'This account has already been deleted');
+
+    // Only if it is still the same request: a restore and a new request racing can't both win
+    const { count } = await prisma.user.updateMany({ where: { id: user.id, deletionRequestedAt: user.deletionRequestedAt }, data: { deletionRequestedAt: null } });
+    if (count === 0) throw expired();
+
+    sendAccountRestoredEmail(user.email).catch((err) => console.error('Restored email not sent:', err.message));
+    return signIn({ ...user, deletionRequestedAt: null }, context);
 };
 
 const updateProfile = async (userId, data) => toPublicUser(await prisma.user.update({ where: { id: userId }, data }));
@@ -290,7 +335,8 @@ module.exports = {
     appleAuth,
     refreshAccessToken,
     logoutUser,
-    deleteAccount,
+    restoreAccount,
+    toPublicUser,
     updateProfile,
     getPublicUser,
     sendEmailVerification,

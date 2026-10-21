@@ -44,6 +44,9 @@ const inviteLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 30, message
 // Each scan is a paid Gemini call; nobody scans this many schedules by hand
 const ocrLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 30, message: 'Too many scans. Please try again later.' });
 
+// A full copy of the account is a big query; nobody needs it more than a few times an hour
+const exportLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 10, message: 'Too many downloads. Please try again later.' });
+
 module.exports = {
     authLimiter,
     emailCodeLimiter,
@@ -54,4 +57,5 @@ module.exports = {
     weatherLimiter,
     inviteLimiter,
     ocrLimiter,
+    exportLimiter,
 };

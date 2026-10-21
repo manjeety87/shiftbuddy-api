@@ -61,10 +61,9 @@ const logout = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, null, 'Logged out successfully'));
 });
 
-const deleteAccount = asyncHandler(async (req, res) => {
-    await authService.deleteAccount(req.user.id);
-    clearRefreshCookie(res);
-    res.status(200).json(new ApiResponse(200, null, 'Account deleted successfully'));
+const restoreAccount = asyncHandler(async (req, res) => {
+    const result = await authService.restoreAccount(req.body, contextOf(req));
+    sendSession(req, res, 200, result, 'Welcome back — your account is restored');
 });
 
 const updateProfile = asyncHandler(async (req, res) => {
@@ -116,7 +115,7 @@ module.exports = {
     refreshAccessToken,
     getCurrentLoggedInUser,
     logout,
-    deleteAccount,
+    restoreAccount,
     updateProfile,
     sendEmailVerification,
     verifyEmail,

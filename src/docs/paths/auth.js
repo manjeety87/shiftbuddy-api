@@ -1,10 +1,15 @@
 const v = require('../../validation/auth.validation');
+const a = require('../../validation/account.validation');
 const u = require('../../validation/user.validation');
 const { op, ok, ref, errors, error } = require('../helpers');
 
 const tag = 'Auth & profile';
 const authError = error(401, 'Wrong email/password, or the Google/Apple token didn’t verify');
 const tooMany = errors.rateLimited;
+const pendingNote =
+    'An account waiting to be deleted (POST /account/deletion) is not signed in: once the person is proved, it answers 403 ' +
+    '`ACCOUNT_PENDING_DELETION` with `details.purgeAt` and a 15-minute `details.restoreToken` for POST /auth/restore.';
+const pending = error(403, 'The account is waiting to be deleted (ACCOUNT_PENDING_DELETION): details carry purgeAt and restoreToken');
 
 module.exports = {
     '/auth/register': {
@@ -15,7 +20,7 @@ module.exports = {
                 'Password: 8+ characters, one uppercase letter, one number (stored with bcrypt). ' +
                 'Sends a 6-digit email verification code. Returns the user and a token pair so the app is signed in at once. ' +
                 'Rate limited with the other sign-in routes.',
-            responses: { ...ok('Account created', ref('AuthResponse'), 201), ...errors.validation, ...error(409, 'An account with this email already exists'), ...tooMany },
+            responses: { ...ok('Account created', ref('AuthResponse'), 201), ...errors.validation, ...error(409, 'An account with this email already exists, or is waiting to be deleted (ACCOUNT_PENDING_DELETION)'), ...tooMany },
         }),
     },
     '/auth/login': {
@@ -24,8 +29,9 @@ module.exports = {
             summary: 'Sign in with email + password',
             description:
                 'Returns the user and a fresh token pair. An unknown email answers 404 `NO_ACCOUNT` so the client can offer sign-up; a wrong password ' +
-                '401 `WRONG_PASSWORD`; an account made with Google/Apple 401 `SOCIAL_ACCOUNT` (codes are in `details.code`).',
-            responses: { ...ok('Signed in', ref('AuthResponse')), ...errors.validation, ...authError, ...error(404, 'No account uses this email (NO_ACCOUNT)'), ...tooMany },
+                '401 `WRONG_PASSWORD`; an account made with Google/Apple 401 `SOCIAL_ACCOUNT` (codes are in `details.code`). ' +
+                pendingNote,
+            responses: { ...ok('Signed in', ref('AuthResponse')), ...errors.validation, ...authError, ...pending, ...error(404, 'No account uses this email (NO_ACCOUNT)'), ...tooMany },
         }),
     },
     '/auth/google': {
@@ -33,7 +39,7 @@ module.exports = {
             tag, auth: false, body: v.googleAuthSchema,
             summary: 'Sign in (or sign up) with Google',
             description: 'Verifies the Google ID token server-side, then finds or creates the account (linking by email).',
-            responses: { ...ok('Signed in', ref('AuthResponse')), ...errors.validation, ...authError, ...tooMany },
+            responses: { ...ok('Signed in', ref('AuthResponse')), ...errors.validation, ...authError, ...pending, ...tooMany },
         }),
     },
     '/auth/apple': {
@@ -41,7 +47,18 @@ module.exports = {
             tag, auth: false, body: v.appleAuthSchema,
             summary: 'Sign in (or sign up) with Apple',
             description: 'Verifies the Apple identity token. Apple only sends the user’s name the first time, so the app forwards `fullName` when it has it.',
-            responses: { ...ok('Signed in', ref('AuthResponse')), ...errors.validation, ...authError, ...tooMany },
+            responses: { ...ok('Signed in', ref('AuthResponse')), ...errors.validation, ...authError, ...pending, ...tooMany },
+        }),
+    },
+    '/auth/restore': {
+        post: op({
+            tag, auth: false, body: a.restoreAccountSchema,
+            summary: 'Restore an account waiting to be deleted, and sign in',
+            description:
+                'Send the `restoreToken` from a sign-in’s 403 `ACCOUNT_PENDING_DELETION`. The deletion is cancelled and everything is as it was; ' +
+                'an email confirms it, and the answer is a normal sign-in (browsers get the cookie, as with /auth/login). ' +
+                'A stale token answers 400 `RESTORE_EXPIRED` (sign in again); an account already erased 410.',
+            responses: { ...ok('Restored and signed in', ref('AuthResponse')), ...errors.validation, ...error(410, 'Already erased'), ...tooMany },
         }),
     },
     '/auth/refresh-token': {
@@ -80,14 +97,6 @@ module.exports = {
             summary: 'Sign out',
             description: 'Ends this device’s session, so its refresh token stops working. Other devices stay signed in.',
             responses: { ...ok('Signed out') },
-        }),
-    },
-    '/auth/account': {
-        delete: op({
-            tag,
-            summary: 'Delete the account and everything in it',
-            description: 'Permanent. Jobs, shifts and shares are removed with the user (database cascade).',
-            responses: { ...ok('Account deleted') },
         }),
     },
     '/auth/profile': {
