@@ -8,7 +8,7 @@ const { DateTime } = require('luxon');
 const { findOverlapPairs, splitByOverlap, planShiftCopies, summarizeShifts } = require('../src/domain/shifts');
 const { createShiftSchema, updateShiftSchema } = require('../src/validation/shift.validation');
 const { createJobSchema, updateJobSchema } = require('../src/validation/job.validation');
-const { distanceKm, findTravelPairs } = require('../src/domain/travel');
+const { distanceKm, findTravelPairs, isSamePlace, previousShiftFor, walkingMinutes } = require('../src/domain/travel');
 const { rangeIn, buildScheduleMessage } = require('../src/domain/scheduleMessage');
 const { jobName } = require('../src/domain/jobLabels');
 
@@ -91,6 +91,25 @@ test('travel pairs: only nearby-in-time shifts at different, known places', () =
 
     const km = distanceKm({ lat: 43.6532, lng: -79.3832 }, { lat: 43.7001, lng: -79.4163 });
     assert.ok(km > 5.5 && km < 6.5, `expected about 6 km, got ${km}`);
+});
+
+test('leave from the shift just before: latest one within 4 hours, with a pin', () => {
+    const next = shift('n', '2026-10-21T17:30', '2026-10-21T21:00', cafe, 'job-2');
+    const boathouse = shift('b', '2026-10-21T09:00', '2026-10-21T17:30');
+    const morning = shift('m', '2026-10-21T06:00', '2026-10-21T08:00');
+    assert.equal(previousShiftFor(next, [morning, boathouse, next])?.id, 'b'); // the latest wins, itself is ignored
+    assert.equal(previousShiftFor(next, [morning])?.id, undefined); // ended 9.5 hours before: they went home
+    assert.equal(previousShiftFor(next, [shift('x', '2026-10-21T10:00', '2026-10-21T13:30')])?.id, 'x'); // exactly 4 hours: still counts
+    assert.equal(previousShiftFor(next, [{ ...boathouse, job: { ...boathouse.job, latitude: null } }]), null); // no pin: from home
+    assert.equal(previousShiftFor(next, [shift('o', '2026-10-21T16:00', '2026-10-21T18:00')]), null); // overlapping: not before it
+    assert.equal(previousShiftFor(next, []), null);
+
+    assert.ok(isSamePlace(cafe, { ...cafe, latitude: 43.7002 }));
+    // ~260 m across a mall is a few minutes' walk; across town is not walkable
+    const walk = walkingMinutes({ lat: 43.6544, lng: -79.3807 }, { lat: 43.6567, lng: -79.3814 });
+    assert.ok(walk >= 3 && walk <= 6, `expected a short walk, got ${walk}`);
+    assert.equal(walkingMinutes({ lat: 43.6532, lng: -79.3832 }, { lat: 43.7001, lng: -79.4163 }), null);
+    assert.ok(!isSamePlace(cafe, boathouse.job));
 });
 
 test('schedule message: weeks start on Sunday in the user’s zone', () => {

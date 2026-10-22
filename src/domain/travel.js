@@ -39,4 +39,36 @@ const findTravelPairs = (shifts) => {
     return pairs;
 };
 
-module.exports = { hasLocation, coordsOf, distanceKm, findTravelPairs };
+// Closer than this, people walk: transit planners return nothing for a 300 m hop
+// and nobody drives across a mall. Streets aren't straight lines, hence the detour factor.
+const WALKABLE_KM = 1.2;
+const WALK_KM_PER_HOUR = 5;
+const WALK_DETOUR = 1.3;
+
+/** Walking minutes between two `{ lat, lng }` points, or null when it's too far to walk. */
+const walkingMinutes = (a, b) => {
+    const km = distanceKm(a, b);
+    if (km > WALKABLE_KM) return null;
+    return Math.max(1, Math.round(((km * WALK_DETOUR) / WALK_KM_PER_HOUR) * 60));
+};
+
+/** Two places close enough to be the same building or plaza — no travel between them. */
+const isSamePlace = (a, b) => distanceKm(coordsOf(a), coordsOf(b)) < SAME_PLACE_KM;
+
+/**
+ * The shift someone comes straight from on their way to `shift`: one of their
+ * `others` (each with its `job`) that ends at or before it starts, within the same
+ * 4-hour window findTravelPairs uses — after a longer break they've likely gone
+ * home. The latest one wins. null when there's none, or it has no map pin (then
+ * the trip starts from home).
+ */
+const previousShiftFor = (shift, others) => {
+    const candidates = others
+        .filter((other) => other.id !== shift.id && other.endTime <= shift.startTime)
+        .filter((other) => (shift.startTime.getTime() - other.endTime.getTime()) / MINUTE_MS <= MAX_GAP_MINUTES)
+        .sort((a, b) => b.endTime - a.endTime);
+    const [previous] = candidates;
+    return previous && hasLocation(previous.job) ? previous : null;
+};
+
+module.exports = { hasLocation, coordsOf, distanceKm, findTravelPairs, isSamePlace, previousShiftFor, walkingMinutes, MAX_GAP_MINUTES };

@@ -180,12 +180,26 @@ const TransitItinerary = {
 const LeavePlan = {
     type: 'object',
     properties: {
-        mode: { type: 'string', enum: ['TRANSIT', 'DRIVING'] },
+        mode: { type: 'string', enum: ['TRANSIT', 'DRIVING', 'WALK'], description: 'WALK within about 1 km, whatever the usual commute' },
         leaveAt: dateTime,
         arriveBy: { ...dateTime, description: 'Shift start minus the user’s arrival buffer' },
         arrivalBufferMinutes: { type: 'integer' },
         travelMinutes: { type: 'integer' },
         lines: { type: 'array', items: { type: 'string' }, example: ['35', '5'], description: 'Transit lines ridden; empty when driving' },
+        from: {
+            type: 'object',
+            description: 'Where the trip starts',
+            properties: {
+                kind: { type: 'string', enum: ['previousShift', 'home'] },
+                name: { type: 'string', example: 'Boathouse' },
+                endsAt: { ...dateTime, description: 'previousShift only: when that shift ends' },
+                shiftId: { type: 'string', format: 'uuid' },
+            },
+        },
+        alternatives: { type: 'array', items: { type: 'string', enum: ['home', 'previousShift'] }, description: 'Other starting points that can be asked for with ?from=' },
+        sameBuilding: { type: 'boolean', description: 'The shift before is in the same building: no travel, be there by arriveBy' },
+        leavesAsShiftEnds: { type: 'boolean', description: 'The gap is shorter than the trip: leave as the shift before ends' },
+        lateMinutes: { type: 'integer', description: 'How late the start will be reached (0 = on time)' },
     },
 };
 
@@ -268,6 +282,10 @@ const ShiftRoutes = {
     type: 'object',
     properties: {
         fromHome: { type: 'boolean' },
+        from: { type: 'object', properties: { kind: { type: 'string', enum: ['previousShift', 'home', 'here'] }, name: { type: 'string' } } },
+        previousShift: nullable({ type: 'object', properties: { name: { type: 'string' }, endsAt: dateTime, shiftId: { type: 'string', format: 'uuid' } } }),
+        hasHome: { type: 'boolean' },
+        walking: nullable({ type: 'object', description: 'Within about 1 km', properties: { durationMinutes: { type: 'integer' }, leaveBy: dateTime } }),
         origin: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } } },
         destination: { type: 'object', properties: { lat: { type: 'number' }, lng: { type: 'number' } } },
         arriveBy: dateTime,

@@ -1,5 +1,5 @@
 const v = require('../../validation/shift.validation');
-const { routesQuerySchema } = require('../../validation/commute.validation');
+const { leavePlanQuerySchema, routesQuerySchema } = require('../../validation/commute.validation');
 const { op, ok, ref, errors, error, pathParam } = require('../helpers');
 
 const tag = 'Shifts';
@@ -95,11 +95,14 @@ module.exports = {
     },
     '/shifts/{shiftId}/leave-plan': {
         get: op({
-            tag: planningTag, params: [shiftId],
-            summary: 'When to leave home for this shift',
+            tag: planningTag, params: [shiftId], query: leavePlanQuerySchema,
+            summary: 'When to leave for this shift, and from where',
             description:
-                'Uses the user’s home, commute mode and arrival buffer: arrive by = start − buffer, then the latest transit trip ' +
-                'or the drive time. `data` is null when there’s no home, no job location or no route.',
+                'Starts from the job of the user’s shift ending in the 4 hours before this one (they’re already out), otherwise ' +
+                'from home — `from` says which, `alternatives` what else can be asked for (`?from=home` answers “what if I came from home?”). ' +
+                'Arrive by = start − buffer, then the latest transit trip or the drive time. In the same building as the shift before: ' +
+                '`sameBuilding`. When the gap is shorter than the trip: `leavesAsShiftEnds` with `lateMinutes`. `data` is null once ' +
+                'the shift has started, or when there’s no starting point, job location or route.',
             responses: { ...ok('Leave plan (or null)', { ...ref('LeavePlan'), nullable: true }), ...errors.notFound, ...errors.rateLimited },
         }),
     },
@@ -120,7 +123,8 @@ module.exports = {
             tag: planningTag, params: [shiftId], query: routesQuerySchema,
             summary: 'Driving and transit to this shift, and the way home',
             description:
-                'From home, or from `fromLat`/`fromLng` (the phone’s location). Transit: up to 5 distinct routes arriving by the buffer time, ' +
+                'From `fromLat`/`fromLng` (the phone’s location), else by `from` like the leave plan (shift just before, else home); ' +
+                '`from` and `previousShift` say which. Transit: up to 5 distinct routes arriving by the buffer time, ' +
                 'each with the first stop and boarding time. If transit is down, driving still comes back (`transit.status = unavailable`).',
             responses: {
                 ...ok('Routes', ref('ShiftRoutes')),
