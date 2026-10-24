@@ -25,7 +25,7 @@ const User = {
         signInMethods: { type: 'object', description: 'Which providers are linked', properties: { google: { type: 'boolean' }, apple: { type: 'boolean' } } },
         taxDeductionPercent: { type: 'number', example: 13 },
         commuteMode: { type: 'string', enum: ['TRANSIT', 'DRIVING'] },
-        arrivalBufferMinutes: { type: 'integer', enum: [0, 5, 10, 15], description: 'How early to plan arriving at shifts' },
+        arrivalBufferMinutes: { type: 'integer', minimum: 0, maximum: 120, description: 'How early to plan arriving at shifts, in minutes' },
         homeLocation: nullable({ $ref: '#/components/schemas/Place' }),
     },
 };

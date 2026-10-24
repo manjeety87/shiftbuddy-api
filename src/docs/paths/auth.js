@@ -105,7 +105,7 @@ module.exports = {
             summary: 'Update name, tax estimate, commute mode or arrival buffer',
             description:
                 'Send only what changes. `commuteMode` drives travel conflicts and leave-by times; ' +
-                '`arrivalBufferMinutes` (0, 5, 10 or 15) is how early routes plan to get you to a shift.',
+                '`arrivalBufferMinutes` (whole minutes, 0–120) is how early routes plan to get you to a shift.',
             responses: { ...ok('Updated user', ref('User')), ...errors.validation },
         }),
     },

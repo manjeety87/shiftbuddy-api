@@ -1,7 +1,9 @@
 const { z } = require('zod');
 
-// Arrive this many minutes before a shift starts (0 = exactly on time)
-const ARRIVAL_BUFFER_OPTIONS = [0, 5, 10, 15];
+// Arrive this many minutes before a shift starts (0 = exactly on time). Any whole
+// minute is allowed (the apps offer 0/5/10/15 plus Custom); two hours is plenty
+// and keeps a typo like 600 from planning a trip the night before.
+const ARRIVAL_BUFFER_MAX_MINUTES = 120;
 
 const updateProfileSchema = z.object({
     name: z.string().trim().min(2).max(100).optional(),
@@ -10,8 +12,9 @@ const updateProfileSchema = z.object({
     commuteMode: z.enum(['TRANSIT', 'DRIVING']).optional(),
     arrivalBufferMinutes: z.coerce
         .number()
-        .int()
-        .refine((minutes) => ARRIVAL_BUFFER_OPTIONS.includes(minutes), `Choose one of: ${ARRIVAL_BUFFER_OPTIONS.join(', ')} minutes`)
+        .int('Use whole minutes')
+        .min(0, 'Use 0 minutes or more')
+        .max(ARRIVAL_BUFFER_MAX_MINUTES, `Up to ${ARRIVAL_BUFFER_MAX_MINUTES} minutes`)
         .optional(),
 });
 
@@ -26,7 +29,7 @@ const verifyEmailSchema = z.object({
 });
 
 module.exports = {
-    ARRIVAL_BUFFER_OPTIONS,
+    ARRIVAL_BUFFER_MAX_MINUTES,
     verifyEmailSchema,
     updateProfileSchema,
     homeLocationSchema,
