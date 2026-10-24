@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { NOT_MISSED } = require('../constants/shifts');
 const ApiError = require('../utils/ApiError');
 const transitService = require('./transit.service');
 const { getDrivingRoute } = require('./driving.service');
@@ -26,7 +27,7 @@ const loadContext = async (userId, shiftId) => {
 
     // Only shifts ending in the few hours before this one can be where the trip starts
     const before = await prisma.shift.findMany({
-        where: { userId, id: { not: shift.id }, endTime: { lte: shift.startTime, gte: new Date(shift.startTime.getTime() - MAX_GAP_MINUTES * MINUTE_MS) } },
+        where: { userId, ...NOT_MISSED, id: { not: shift.id }, endTime: { lte: shift.startTime, gte: new Date(shift.startTime.getTime() - MAX_GAP_MINUTES * MINUTE_MS) } },
         include: { job: true },
     });
     return { shift, user, previous: previousShiftFor(shift, before) };
@@ -72,13 +73,13 @@ const linesOf = (itinerary) => itinerary.legs.filter((leg) => leg.mode !== 'WALK
  * around. Coming from the shift before: in the same building there's nothing to
  * plan; when the gap is shorter than the trip, they leave the moment it ends and
  * `lateMinutes` says by how much they'll miss the start. null once the shift has
- * started, or when it can't be worked out (no starting point, no job pin, no route).
+ * started or is marked missed, or when it can't be worked out (no starting point, no job pin, no route).
  * Within walking distance `mode` is WALK, whatever the usual commute.
  */
 const getLeavePlan = async (userId, shiftId, { from = 'auto' } = {}) => {
     const context = await loadContext(userId, shiftId);
     const { shift, user, previous } = context;
-    if (Date.now() >= shift.startTime.getTime()) return null;
+    if (shift.missedReason || Date.now() >= shift.startTime.getTime()) return null;
 
     const start = startingPoint(context, from);
     if (!start || !hasLocation(shift.job)) return null;

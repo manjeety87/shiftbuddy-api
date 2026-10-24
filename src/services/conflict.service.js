@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { NOT_MISSED } = require('../constants/shifts');
 const { findOverlapPairs } = require('../domain/shifts');
 const { findTravelConflicts } = require('./travelConflict.service');
 
@@ -10,7 +11,7 @@ const findConflicts = async (userId, { from, to } = {}) => {
     const windowStart = from ?? new Date();
     const [shifts, travel] = await Promise.all([
         prisma.shift.findMany({
-            where: { userId, endTime: { gt: windowStart }, ...(to && { startTime: { lt: to } }) },
+            where: { userId, ...NOT_MISSED, endTime: { gt: windowStart }, ...(to && { startTime: { lt: to } }) },
             include: { job: true },
             orderBy: { startTime: 'asc' },
         }),

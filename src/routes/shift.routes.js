@@ -7,10 +7,10 @@ const { getShiftWeather } = require('../controllers/weather.controller');
 const { commuteLimiter, weatherLimiter } = require('../middleware/rateLimiter');
 const { idParams } = require('../validation/common.validation');
 const { leavePlanQuerySchema, routesQuerySchema } = require('../validation/commute.validation');
-const { createShiftSchema, bulkCreateShiftsSchema, copyShiftsSchema, updateShiftSchema, shiftFilterQuerySchema, travelConflictsQuerySchema, scheduleMessageQuerySchema } = require('../validation/shift.validation');
+const { createShiftSchema, bulkCreateShiftsSchema, copyShiftsSchema, updateShiftSchema, shiftFilterQuerySchema, travelConflictsQuerySchema, scheduleMessageQuerySchema, markMissedSchema } = require('../validation/shift.validation');
 
 const router = express.Router();
-const { createShift, createShiftsBulk, copyShifts, getConflicts, getScheduleMessage, getTravelConflicts, getMyShifts, getShiftById, updateShift, deleteShift, getShiftsSummary } = shiftController;
+const { createShift, createShiftsBulk, copyShifts, getConflicts, getScheduleMessage, getTravelConflicts, getMyShifts, getShiftById, updateShift, deleteShift, markMissed, clearMissed, getShiftsSummary } = shiftController;
 const shiftId = idParams('shiftId');
 
 router.use(requireAuth);
@@ -33,5 +33,7 @@ router.get('/:shiftId/weather', weatherLimiter, validate({ params: shiftId }), g
 router.get('/:shiftId/routes', commuteLimiter, validate({ params: shiftId, query: routesQuerySchema }), getShiftRoutes);
 router.patch('/:shiftId', validate({ params: shiftId, body: updateShiftSchema }), updateShift);
 router.delete('/:shiftId', validate({ params: shiftId }), deleteShift);
+router.put('/:shiftId/missed', validate({ params: shiftId, body: markMissedSchema }), markMissed);
+router.delete('/:shiftId/missed', validate({ params: shiftId }), clearMissed);
 
 module.exports = router;

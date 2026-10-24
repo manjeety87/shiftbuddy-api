@@ -37,6 +37,9 @@ const assertValidEntry = (clockInAt, clockOutAt, breakMinutes) => {
 /** The entry the user is clocked in on right now, or null. */
 const getCurrentEntry = (userId) => prisma.timeEntry.findFirst({ where: { userId, clockOut: null }, include: withJob, orderBy: { clockIn: 'desc' } });
 
+// Worked and missed can't both be true; the user undoes "missed" first
+const missedShiftError = () => new ApiError(409, 'This shift is marked as missed — undo that first', { code: 'SHIFT_MISSED' });
+
 /**
  * Starts the clock for a scheduled shift — only from 10 minutes before it begins
  * until it ends (400 TOO_EARLY with `opensAt`, or SHIFT_OVER). Anything else —
@@ -51,6 +54,7 @@ const clockIn = (userId, { shiftId }) =>
 
         const shift = await tx.shift.findFirst({ where: { id: shiftId, userId } });
         if (!shift) throw new ApiError(404, 'Shift not found');
+        if (shift.missedReason) throw missedShiftError();
 
         const now = new Date();
         const { opensAt, closesAt } = clockInWindow(shift);
@@ -81,6 +85,7 @@ const createEntry = async (userId, { shiftId, jobId: givenJobId, clockIn: clockI
     if (shiftId) {
         const shift = await prisma.shift.findFirst({ where: { id: shiftId, userId }, include: { timeEntries: { include: withJob, take: 1 } } });
         if (!shift) throw new ApiError(404, 'Shift not found');
+        if (shift.missedReason) throw missedShiftError();
         if (shift.timeEntries.length > 0) throw new ApiError(409, 'This shift already has hours — change them instead', { code: 'ENTRY_EXISTS', entry: shift.timeEntries[0] });
         jobId = shift.jobId;
     } else {

@@ -56,6 +56,16 @@ const updateShift = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, shift, 'Shift updated successfully'));
 });
 
+const markMissed = asyncHandler(async (req, res) => {
+    const shift = await shiftService.markMissed(req.user.id, req.validated.params.shiftId, req.body);
+    res.status(200).json(new ApiResponse(200, shift, 'Shift marked as missed'));
+});
+
+const clearMissed = asyncHandler(async (req, res) => {
+    const shift = await shiftService.clearMissed(req.user.id, req.validated.params.shiftId);
+    res.status(200).json(new ApiResponse(200, shift, 'Shift is back on your schedule'));
+});
+
 const deleteShift = asyncHandler(async (req, res) => {
     await shiftService.deleteShift(req.user.id, req.validated.params.shiftId);
     res.status(200).json(new ApiResponse(200, null, 'Shift deleted successfully'));
@@ -73,4 +83,6 @@ module.exports = {
     getShiftById,
     updateShift,
     deleteShift,
+    markMissed,
+    clearMissed,
 };

@@ -13,7 +13,8 @@ module.exports = {
             description:
                 'For hours the clock didn’t record. With `shiftId` they belong to that scheduled shift (one entry per shift — a second answers 409 ' +
                 'ENTRY_EXISTS with `details.entry`); with `jobId` alone it’s work that wasn’t on the schedule. Same rules as fixing an entry ' +
-                '(not in the future, at most 24 hours, break shorter than the entry). Without `breakMinutes` the usual break is assumed.',
+                '(not in the future, at most 24 hours, break shorter than the entry). Without `breakMinutes` the usual break is assumed. ' +
+                'A shift marked missed answers 409 SHIFT_MISSED.',
             responses: { ...ok('Entry added', ref('TimeEntry'), 201), ...errors.validation, ...errors.notFound },
         }),
         get: op({
@@ -65,7 +66,7 @@ module.exports = {
             description:
                 'For a scheduled shift, and only from 10 minutes before it starts until it ends: earlier answers 400 with `details.code` ' +
                 'TOO_EARLY and `details.opensAt`; after the end, SHIFT_OVER. The time is the server’s “now”. Only one clock runs at a time. ' +
-                'Hours outside a shift are added with POST /timesheet.',
+                'Hours outside a shift are added with POST /timesheet. A shift marked missed answers 409 SHIFT_MISSED.',
             responses: { ...ok('Clocked in', ref('TimeEntry'), 201), ...errors.validation, ...errors.notFound, ...alreadyIn },
         }),
     },

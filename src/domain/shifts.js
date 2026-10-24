@@ -4,7 +4,7 @@ const { DateTime } = require('luxon');
 // fetch the rows and call these, so the same code can run anywhere JavaScript
 // does (tests today, the shared package for the web app later).
 //
-// A "shift" here is `{ startTime: Date, endTime: Date, jobId, notes?, job? }`.
+// A "shift" here is `{ startTime: Date, endTime: Date, jobId, notes?, missedReason?, job? }`.
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -80,16 +80,33 @@ const planShiftCopies = (originals, { targetDates, offsetDays, timeZone }) => {
     );
 };
 
+/** Marked as missed (sick, called off…): still on the schedule, but it counts for nothing. */
+const isMissed = (shift) => shift.missedReason != null;
+
+/** `{ total: 3, byReason: { SICK: 2, CALLED_OFF: 1 } }` — reasons with none are left out. */
+const countMissed = (shifts) => {
+    const byReason = {};
+    let total = 0;
+    for (const shift of shifts) {
+        if (!isMissed(shift)) continue;
+        byReason[shift.missedReason] = (byReason[shift.missedReason] ?? 0) + 1;
+        total += 1;
+    }
+    return { total, byReason };
+};
+
 /**
  * Hours and estimated pay for a set of shifts (each with its `job`), in total
  * and per job. Each shift is split at `now`: what's already worked vs what's
  * still on the schedule. Net pay is gross minus the user's own tax estimate.
+ * Missed shifts earn nothing; they're only counted, under `missed`.
  */
 const summarizeShifts = (shifts, { taxPercent, now = Date.now() }) => {
     const byJobMap = new Map();
     let completedHours = 0;
+    const counted = shifts.filter((shift) => !isMissed(shift));
 
-    for (const shift of shifts) {
+    for (const shift of counted) {
         const hours = hoursBetween(shift.startTime, shift.endTime);
         const workedUntil = Math.min(Math.max(now, shift.startTime.getTime()), shift.endTime.getTime());
         completedHours += (workedUntil - shift.startTime.getTime()) / HOUR_MS;
@@ -120,7 +137,7 @@ const summarizeShifts = (shifts, { taxPercent, now = Date.now() }) => {
     const totalGrossPay = round2(byJob.reduce((sum, job) => sum + job.grossPay, 0));
 
     return {
-        shiftCount: shifts.length,
+        shiftCount: counted.length,
         totalHours,
         completedHours: workedHours,
         upcomingHours: round2(totalHours - workedHours),
@@ -128,7 +145,8 @@ const summarizeShifts = (shifts, { taxPercent, now = Date.now() }) => {
         totalNetPay: round2(totalGrossPay * (1 - taxPercent / 100)),
         taxDeductionPercent: taxPercent,
         byJob,
+        missed: countMissed(shifts),
     };
 };
 
-module.exports = { findOverlapPairs, splitByOverlap, planShiftCopies, summarizeShifts };
+module.exports = { findOverlapPairs, splitByOverlap, planShiftCopies, summarizeShifts, isMissed, countMissed };

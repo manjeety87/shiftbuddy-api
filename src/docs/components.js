@@ -66,6 +66,8 @@ const Shift = {
         startTime: dateTime,
         endTime: { ...dateTime, description: 'After startTime; the next day for overnight shifts' },
         notes: nullable({ type: 'string' }),
+        missedReason: nullable({ type: 'string', enum: ['SICK', 'EMERGENCY', 'TRANSIT', 'CALLED_OFF', 'OTHER'], description: 'Set when the user couldn’t go or the shift was called off — it then counts for nothing (pay, leave-by, conflicts)' }),
+        missedNote: nullable({ type: 'string' }),
         userId: { type: 'string', format: 'uuid' },
         job: { $ref: '#/components/schemas/Job' },
         timeEntries: { type: 'array', description: 'In GET /shifts and GET /shifts/{shiftId} only: the hours clocked for this shift (usually none or one)', items: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, clockIn: dateTime, clockOut: nullable(dateTime), breakMinutes: { type: 'integer' } } } },
@@ -85,7 +87,7 @@ const BulkResult = {
 const PaySummary = {
     type: 'object',
     properties: {
-        shiftCount: { type: 'integer' },
+        shiftCount: { type: 'integer', description: 'Shifts that count — missed ones are only in `missed`' },
         totalHours: { type: 'number' },
         completedHours: { type: 'number', description: 'Already worked (shifts split at the current time)' },
         upcomingHours: { type: 'number', description: 'Still on the schedule in this period' },
@@ -107,6 +109,11 @@ const PaySummary = {
                     grossPay: { type: 'number' },
                 },
             },
+        },
+        missed: {
+            type: 'object',
+            description: 'Shifts in the period marked missed, in total and per reason (reasons with none are left out)',
+            properties: { total: { type: 'integer' }, byReason: { type: 'object', additionalProperties: { type: 'integer' }, example: { SICK: 2, CALLED_OFF: 1 } } },
         },
     },
 };

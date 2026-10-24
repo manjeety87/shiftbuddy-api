@@ -1,7 +1,7 @@
 const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
 const { withUserLock } = require('../utils/withUserLock');
-const { MAX_SHIFT_HOURS, MAX_SHIFTS_PER_LIST } = require('../constants/shifts');
+const { MAX_SHIFT_HOURS, MAX_SHIFTS_PER_LIST, NOT_MISSED } = require('../constants/shifts');
 const { planShiftCopies, splitByOverlap, summarizeShifts } = require('../domain/shifts');
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -19,11 +19,13 @@ const assertActiveJobs = async (db, userId, jobIds) => {
 };
 
 // Shifts that share any time with [startTime, endTime). Back-to-back shifts
-// (one ends at 5:00, the next starts at 5:00) don't count as overlapping.
+// (one ends at 5:00, the next starts at 5:00) don't count as overlapping, and
+// neither does a missed one: its time is free again (a called-off shift, re-filled).
 const findOverlappingShifts = (db, userId, startTime, endTime, excludeShiftId) =>
     db.shift.findMany({
         where: {
             userId,
+            ...NOT_MISSED,
             ...(excludeShiftId && { id: { not: excludeShiftId } }),
             startTime: { lt: endTime },
             endTime: { gt: startTime },
@@ -72,7 +74,7 @@ const createShiftsBulk = (userId, shifts) =>
         const spanStart = new Date(Math.min(...shifts.map((shift) => shift.startTime.getTime())));
         const spanEnd = new Date(Math.max(...shifts.map((shift) => shift.endTime.getTime())));
         const existing = await tx.shift.findMany({
-            where: { userId, startTime: { lt: spanEnd }, endTime: { gt: spanStart } },
+            where: { userId, ...NOT_MISSED, startTime: { lt: spanEnd }, endTime: { gt: spanStart } },
             select: { startTime: true, endTime: true },
         });
 
@@ -155,6 +157,28 @@ const updateShift = (userId, shiftId, { allowOverlap, ...data }) =>
         return tx.shift.update({ where: { id: shiftId }, data, include: { job: true } });
     });
 
+/**
+ * "I couldn't go" — sick, an emergency, transit, or the manager called it off; before
+ * or after the shift. It stays on the schedule as a record and stops counting
+ * (pay, leave-by, conflicts, clock-in). Not once it has hours on the timesheet:
+ * worked and missed can't both be true, so that answers 409 HAS_HOURS.
+ */
+const markMissed = (userId, shiftId, { reason, note }) =>
+    // Same lock as clock-in, so a clock-in can't slip in between the check and the write
+    withScheduleLock(userId, async (tx) => {
+        const shift = await findOwnShift(tx, userId, shiftId, { timeEntries: { select: { id: true }, take: 1 } });
+        if (shift.timeEntries.length > 0) {
+            throw new ApiError(409, 'This shift has hours on your timesheet — delete them first', { code: 'HAS_HOURS' });
+        }
+        return tx.shift.update({ where: { id: shiftId }, data: { missedReason: reason, missedNote: note ?? null }, include: withHours });
+    });
+
+/** Undo: the shift counts again. Not checked for overlaps — a clash shows with the others on Home. */
+const clearMissed = async (userId, shiftId) => {
+    await findOwnShift(prisma, userId, shiftId);
+    return prisma.shift.update({ where: { id: shiftId }, data: { missedReason: null, missedNote: null }, include: withHours });
+};
+
 const deleteShift = async (userId, shiftId) => {
     // Shifts ke liye hard delete theek hai (Jobs ke uljat soft-delete nahi) —
     // ek shift sirf ek calendar event hai, usse "identity/history" jaisi cheez judi nahi
@@ -179,6 +203,8 @@ module.exports = {
     getShiftsSummary,
     updateShift,
     deleteShift,
+    markMissed,
+    clearMissed,
     createShiftsBulk,
     copyShifts,
 };

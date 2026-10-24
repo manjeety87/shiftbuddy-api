@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { NOT_MISSED } = require('../constants/shifts');
 const ApiError = require('../utils/ApiError');
 
 // "Let someone see my shifts." Every read of another person's schedule goes
@@ -141,7 +142,7 @@ const getSharedShifts = async (viewerId, ownerId, { from, to }) => {
     const [owner, shifts] = await Promise.all([
         prisma.user.findUnique({ where: { id: ownerId }, select: { id: true, name: true } }),
         prisma.shift.findMany({
-            where: { userId: ownerId, startTime: { gte: from, lte: to } },
+            where: { userId: ownerId, ...NOT_MISSED, startTime: { gte: from, lte: to } },
             select: { id: true, startTime: true, endTime: true, job: { select: { title: true, companyName: true, color: true } } },
             orderBy: { startTime: 'asc' },
         }),

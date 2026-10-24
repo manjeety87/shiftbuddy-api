@@ -145,6 +145,11 @@ model Shift {
 
   timeEntries TimeEntry[]
 
+  // Set when the user couldn't go, or the shift was called off. The shift stays on
+  // the schedule as a record but counts for nothing: no pay, hours, leave-by or conflicts.
+  missedReason MissedReason?
+  missedNote   String?
+
   // Nearly every shift query is "this user's shifts in a time range"
   @@index([userId, startTime])
   @@index([jobId])
@@ -174,6 +179,14 @@ model TimeEntry {
   @@index([userId, clockIn])
   @@index([jobId, clockIn])
   @@map("time_entries")
+}
+
+enum MissedReason {
+  SICK
+  EMERGENCY
+  TRANSIT
+  CALLED_OFF
+  OTHER
 }
 
 enum PayFrequency {

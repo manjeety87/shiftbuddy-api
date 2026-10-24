@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { NOT_MISSED } = require('../constants/shifts');
 const { getDrivingMinutes } = require('./driving.service');
 const transitService = require('./transit.service');
 const { coordsOf, findTravelPairs } = require('../domain/travel');
@@ -95,7 +96,7 @@ const findTravelConflicts = async (userId, { from, to } = {}) => {
         prisma.shift.findMany({
             // Includes a shift still running when the window opens: "I'm at work now
             // and the next job starts soon" is the most urgent pair there is
-            where: { userId, endTime: { gt: windowStart }, startTime: { lte: windowEnd } },
+            where: { userId, ...NOT_MISSED, endTime: { gt: windowStart }, startTime: { lte: windowEnd } },
             include: { job: true },
             orderBy: { startTime: 'asc' },
         }),

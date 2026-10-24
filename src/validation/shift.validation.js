@@ -1,6 +1,6 @@
 const { z } = require('zod');
 const { SCHEDULE_RANGES, NAME_STYLES } = require('../constants/scheduleMessage');
-const { MAX_SHIFT_HOURS, MAX_NOTES_LENGTH, MAX_BULK_SHIFTS } = require('../constants/shifts');
+const { MAX_SHIFT_HOURS, MAX_NOTES_LENGTH, MAX_BULK_SHIFTS, MISSED_REASONS } = require('../constants/shifts');
 const { queryDate, timeZone } = require('./common.validation');
 
 const MAX_SHIFT_MS = MAX_SHIFT_HOURS * 60 * 60 * 1000;
@@ -52,6 +52,12 @@ const updateShiftSchema = withValidTimes(
     })
 );
 
+// PUT /shifts/:shiftId/missed — why the user couldn't go, and a note if they want one
+const markMissedSchema = z.object({
+    reason: z.enum(MISSED_REASONS, { error: `Choose a reason: ${MISSED_REASONS.join(', ')}` }),
+    note: notes(),
+});
+
 // GET /shifts and /shifts/summary — every filter optional
 const shiftFilterQuerySchema = z.object({
     from: queryDate().optional().describe('Only shifts starting at or after this time'),
@@ -96,4 +102,5 @@ module.exports = {
     createShiftSchema,
     bulkCreateShiftsSchema,
     updateShiftSchema,
+    markMissedSchema,
 };

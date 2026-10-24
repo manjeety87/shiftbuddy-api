@@ -6,7 +6,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime } = require('luxon');
 const { findOverlapPairs, splitByOverlap, planShiftCopies, summarizeShifts } = require('../src/domain/shifts');
-const { createShiftSchema, updateShiftSchema } = require('../src/validation/shift.validation');
+const { createShiftSchema, updateShiftSchema, markMissedSchema } = require('../src/validation/shift.validation');
 const { createJobSchema, updateJobSchema } = require('../src/validation/job.validation');
 const { distanceKm, findTravelPairs, isSamePlace, previousShiftFor, walkingMinutes } = require('../src/domain/travel');
 const { rangeIn, buildScheduleMessage } = require('../src/domain/scheduleMessage');
@@ -77,6 +77,27 @@ test('summary: hours, pay and the worked/upcoming split at "now"', () => {
 test('summary: no shifts is all zeros, not NaN', () => {
     const summary = summarizeShifts([], { taxPercent: 13 });
     assert.deepEqual([summary.totalHours, summary.completedHours, summary.upcomingHours, summary.totalGrossPay, summary.totalNetPay], [0, 0, 0, 0, 0]);
+    assert.deepEqual(summary.missed, { total: 0, byReason: {} });
+});
+
+test('summary: missed shifts earn nothing and are only counted, per reason', () => {
+    const worked = shift('a', '2026-10-05T09:00', '2026-10-05T17:00');
+    const sick = { ...shift('b', '2026-10-06T09:00', '2026-10-06T17:00'), missedReason: 'SICK' };
+    const calledOff = { ...shift('c', '2026-10-07T10:00', '2026-10-07T14:00', cafe, 'job-2'), missedReason: 'CALLED_OFF' };
+    const summary = summarizeShifts([worked, sick, calledOff], { taxPercent: 0, now: at('2026-10-08T00:00').getTime() });
+
+    assert.equal(summary.shiftCount, 1);
+    assert.equal(summary.totalHours, 8);
+    assert.equal(summary.completedHours, 8);
+    assert.equal(summary.totalGrossPay, 144);
+    assert.deepEqual(summary.byJob.map((j) => j.jobId), ['job-1']);
+    assert.deepEqual(summary.missed, { total: 2, byReason: { SICK: 1, CALLED_OFF: 1 } });
+});
+
+test('missed: a reason from the list is required, an empty note means none', () => {
+    assert.deepEqual(markMissedSchema.parse({ reason: 'CALLED_OFF', note: '  ' }), { reason: 'CALLED_OFF', note: null });
+    assert.equal(markMissedSchema.safeParse({ reason: 'BORED' }).success, false);
+    assert.equal(markMissedSchema.safeParse({}).success, false);
 });
 
 test('travel pairs: only nearby-in-time shifts at different, known places', () => {

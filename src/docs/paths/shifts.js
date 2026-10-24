@@ -93,6 +93,24 @@ module.exports = {
             responses: { ...ok('Shift deleted'), ...errors.notFound },
         }),
     },
+    '/shifts/{shiftId}/missed': {
+        put: op({
+            tag, params: [shiftId], body: v.markMissedSchema,
+            summary: 'Mark a shift as missed',
+            description:
+                'The user couldn’t go (SICK, EMERGENCY, TRANSIT, OTHER) or the manager called it off (CALLED_OFF) — before or after the ' +
+                'shift. It stays on the schedule but counts for nothing: no pay or hours in the summary, no leave-by, no conflicts, no ' +
+                'clock-in, and its time is free for another shift. Marking again changes the reason or note. Refused with 409 HAS_HOURS ' +
+                'when the shift has hours on the timesheet.',
+            responses: { ...ok('The shift', ref('Shift')), ...errors.validation, ...error(409, 'The shift has hours on the timesheet — `details.code` is HAS_HOURS'), ...errors.notFound },
+        }),
+        delete: op({
+            tag, params: [shiftId],
+            summary: 'Undo missed',
+            description: 'The shift counts again. Not checked for overlaps — a clash shows up in /shifts/conflicts.',
+            responses: { ...ok('The shift', ref('Shift')), ...errors.notFound },
+        }),
+    },
     '/shifts/{shiftId}/leave-plan': {
         get: op({
             tag: planningTag, params: [shiftId], query: leavePlanQuerySchema,
@@ -102,7 +120,8 @@ module.exports = {
                 'from home — `from` says which, `alternatives` what else can be asked for (`?from=home` answers “what if I came from home?”). ' +
                 'Arrive by = start − buffer, then the latest transit trip or the drive time. In the same building as the shift before: ' +
                 '`sameBuilding`. When the gap is shorter than the trip: `leavesAsShiftEnds` with `lateMinutes`. `data` is null once ' +
-                'the shift has started, or when there’s no starting point, job location or route.',
+                'the shift has started or is marked missed, or when there’s no starting point, job location or route. Missed shifts are ' +
+                'never the starting point.',
             responses: { ...ok('Leave plan (or null)', { ...ref('LeavePlan'), nullable: true }), ...errors.notFound, ...errors.rateLimited },
         }),
     },
