@@ -1,4 +1,5 @@
 const { z } = require('zod');
+const { FEATURE_KEYS } = require('../constants/features');
 
 // Arrive this many minutes before a shift starts (0 = exactly on time). Any whole
 // minute is allowed (the apps offer 0/5/10/15 plus Custom); two hours is plenty
@@ -15,6 +16,11 @@ const updateProfileSchema = z.object({
         .int('Use whole minutes')
         .min(0, 'Use 0 minutes or more')
         .max(ARRIVAL_BUFFER_MAX_MINUTES, `Up to ${ARRIVAL_BUFFER_MAX_MINUTES} minutes`)
+        .optional(),
+    // Only the switches that change; the rest keep what was chosen
+    features: z
+        .object(Object.fromEntries(FEATURE_KEYS.map((key) => [key, z.boolean().optional()])))
+        .strict()
         .optional(),
 });
 

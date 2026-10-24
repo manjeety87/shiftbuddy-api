@@ -26,6 +26,9 @@ model User {
   commuteMode         CommuteMode @default(TRANSIT)
   // How early to aim to arrive at a shift (0 = right on time) — leave-by times and routes use it
   arrivalBufferMinutes Int        @default(10)
+  // Parts of the app switched on or off — only what the user chose; the rest are
+  // the defaults in constants/features.js (domain/features.js resolves them)
+  features            Json       @default("{}")
   // Old single-session token. Sessions live in the Session table now; this only lets
   // phones signed in before 2026-10-06 move over on their next refresh without a
   // re-login. Drop the column once those tokens have expired (30 days).
@@ -164,6 +167,8 @@ model TimeEntry {
   clockIn      DateTime
   clockOut     DateTime? // null = still on the clock
   breakMinutes Int       @default(0) // unpaid; filled in at clock-out, editable
+  // Added by "add my hours by themselves" from the schedule; false once the user edits it
+  isAutomatic  Boolean   @default(false)
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

@@ -26,6 +26,11 @@ const User = {
         taxDeductionPercent: { type: 'number', example: 13 },
         commuteMode: { type: 'string', enum: ['TRANSIT', 'DRIVING'] },
         arrivalBufferMinutes: { type: 'integer', minimum: 0, maximum: 120, description: 'How early to plan arriving at shifts, in minutes' },
+        features: {
+            type: 'object',
+            description: 'Which parts of the app are on, every key filled in (unchosen ones are their defaults). New accounts start with leaveBy, weather, sharedOnHome and calendarSummary on; timesheet, pay and autoHours off.',
+            properties: Object.fromEntries(['leaveBy', 'weather', 'timesheet', 'pay', 'sharedOnHome', 'calendarSummary', 'autoHours'].map((key) => [key, { type: 'boolean' }])),
+        },
         homeLocation: nullable({ $ref: '#/components/schemas/Place' }),
     },
 };
@@ -260,6 +265,7 @@ const TimeEntry = {
         clockIn: dateTime,
         clockOut: nullable({ ...dateTime, description: 'null while still on the clock' }),
         breakMinutes: { type: 'integer', description: 'Unpaid' },
+        isAutomatic: { type: 'boolean', description: 'Added from the schedule by itself (features.autoHours); false once edited' },
         paidMinutes: nullable({ type: 'integer', description: 'In timesheet lists only: clocked time minus the break' }),
         job: Job,
     },

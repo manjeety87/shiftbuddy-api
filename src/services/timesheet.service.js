@@ -2,8 +2,10 @@ const { DateTime } = require('luxon');
 const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
 const { withUserLock } = require('../utils/withUserLock');
-const { MAX_SHIFT_HOURS } = require('../constants/shifts');
-const { autoBreakMinutes, clockInWindow, payPeriodOn, summarizeAcrossJobs, summarizeEntries, weekOn, summaryRangeOn, estimatedPayOf } = require('../domain/timesheet');
+const { MAX_SHIFT_HOURS, NOT_MISSED } = require('../constants/shifts');
+const { resolveFeatures, addsHoursByItself } = require('../domain/features');
+const { mapWithLimit } = require('../utils/mapWithLimit');
+const { UNLOGGED_DAYS, scheduledEntryFor, autoBreakMinutes, clockInWindow, payPeriodOn, summarizeAcrossJobs, summarizeEntries, weekOn, summaryRangeOn, estimatedPayOf } = require('../domain/timesheet');
 
 // The timesheet: clocking in and out, adding or fixing an entry by hand, and the
 // entries for a pay period (one job) or a week (all jobs) with what they add up to.
@@ -113,10 +115,73 @@ const updateEntry = (userId, entryId, changes) =>
             if (otherOpen) throw new ApiError(409, 'You’re already clocked in on another entry', { code: 'ALREADY_CLOCKED_IN' });
         }
 
-        return tx.timeEntry.update({ where: { id: entryId }, data: { clockIn: clockInAt, clockOut: clockOutAt, breakMinutes }, include: withJob });
+        // Once the user has changed it, it's their entry, not one the schedule wrote
+        return tx.timeEntry.update({ where: { id: entryId }, data: { clockIn: clockInAt, clockOut: clockOutAt, breakMinutes, isAutomatic: false }, include: withJob });
     });
 
 const getEntry = (userId, entryId) => findOwnEntry(prisma, userId, entryId);
+
+/** Finished shifts of the last UNLOGGED_DAYS with no hours, not missed — oldest first. */
+const findUnloggedShifts = (db, userId) => {
+    const now = new Date();
+    return db.shift.findMany({
+        where: { userId, ...NOT_MISSED, endTime: { lte: now, gte: new Date(now.getTime() - UNLOGGED_DAYS * 24 * HOUR_MS) }, timeEntries: { none: {} } },
+        include: withJob,
+        orderBy: { startTime: 'asc' },
+    });
+};
+
+/**
+ * "Add your hours?" — each finished shift without hours, with the entry it would
+ * get if it went to plan (scheduledEntryFor). Empty while the timesheet is off,
+ * and while hours are added by themselves (the hourly run fills them in).
+ */
+const getUnlogged = async (userId) => {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { features: true } });
+    if (!user) throw new ApiError(401, 'User no longer exists');
+    const features = resolveFeatures(user.features);
+    if (!features.timesheet || addsHoursByItself(features)) return [];
+
+    const shifts = await findUnloggedShifts(prisma, userId);
+    return shifts.map((shift) => ({
+        shift: { id: shift.id, startTime: shift.startTime, endTime: shift.endTime, job: jobSummary(shift.job) },
+        suggested: scheduledEntryFor(shift),
+    }));
+};
+
+/** Saves the scheduled hours of every unlogged shift, marked automatic. Returns how many. */
+const addScheduledHours = (userId) =>
+    // The clock uses the same lock, so a clock-in can't land between the check and the write
+    withUserLock(userId, async (tx) => {
+        const shifts = await findUnloggedShifts(tx, userId);
+        if (shifts.length === 0) return 0;
+        await tx.timeEntry.createMany({
+            data: shifts.map((shift) => {
+                const { clockIn: entryStart, clockOut: entryEnd, breakMinutes } = scheduledEntryFor(shift);
+                return { userId, jobId: shift.jobId, shiftId: shift.id, clockIn: entryStart, clockOut: entryEnd, breakMinutes, isAutomatic: true };
+            }),
+        });
+        return shifts.length;
+    });
+
+/** The hourly run for everyone who has hours added by themselves. */
+const addScheduledHoursForAll = async () => {
+    const users = await prisma.user.findMany({
+        where: { deletionRequestedAt: null, AND: [{ features: { path: ['autoHours'], equals: true } }, { features: { path: ['timesheet'], equals: true } }] },
+        select: { id: true },
+    });
+    await mapWithLimit(users, 4, (user) => addScheduledHours(user.id));
+};
+
+/**
+ * Runs at start and every hour. Safe with more than one server: each user's run
+ * holds their lock and re-checks which shifts still have no hours.
+ */
+const scheduleAutomaticHours = () => {
+    const run = () => addScheduledHoursForAll().catch((err) => console.error('Adding scheduled hours failed:', err.message));
+    run();
+    setInterval(run, HOUR_MS).unref();
+};
 
 const deleteEntry = async (userId, entryId) => {
     const { count } = await prisma.timeEntry.deleteMany({ where: { id: entryId, userId } });
@@ -206,4 +271,4 @@ const getSummary = async (userId, { range, offset, timeZone }) => {
     };
 };
 
-module.exports = { getCurrentEntry, clockIn, clockOut, createEntry, getEntry, updateEntry, deleteEntry, getTimesheet, getWeekTimesheet, getSummary };
+module.exports = { getCurrentEntry, clockIn, clockOut, createEntry, getEntry, updateEntry, deleteEntry, getTimesheet, getWeekTimesheet, getSummary, getUnlogged, addScheduledHours, scheduleAutomaticHours };

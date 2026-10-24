@@ -3,6 +3,7 @@ const env = require('./config/env');
 const app = require('./app');
 const prisma = require('./config/prisma');
 const { schedulePurge } = require('./services/account.service');
+const { scheduleAutomaticHours } = require('./services/timesheet.service');
 
 // Requests still running when the host asks us to stop get this long to finish
 const SHUTDOWN_TIMEOUT_MS = 10 * 1000;
@@ -20,6 +21,8 @@ const server = app.listen(env.PORT, async () => {
     console.log('✅ Database connected');
     // Accounts past their deletion grace period are erased here, then every hour
     schedulePurge();
+    // Finished shifts' scheduled hours, for people who chose to have them added by themselves
+    scheduleAutomaticHours();
   } catch (err) {
     const cause = err.message.split(/\r?\n/).filter(Boolean).pop();
     console.error('❌ Database connection failed — check DATABASE_URL in .env.', cause);

@@ -4,7 +4,9 @@ process.env.TZ = 'America/Toronto';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime } = require('luxon');
-const { clockInWindow, weekOn, summarizeAcrossJobs } = require('../src/domain/timesheet');
+const { clockInWindow, weekOn, summarizeAcrossJobs, scheduledEntryFor } = require('../src/domain/timesheet');
+const { resolveFeatures, mergeFeatures, addsHoursByItself } = require('../src/domain/features');
+const { updateProfileSchema } = require('../src/validation/user.validation');
 
 const TORONTO = 'America/Toronto';
 const at = (iso) => DateTime.fromISO(iso, { zone: TORONTO }).toJSDate();
@@ -66,4 +68,30 @@ test('estimated pay takes the user’s deduction off gross, and needs a gross fi
     assert.equal(estimatedPayOf(123.45, 13), 107.4);
     assert.equal(estimatedPayOf(null, 13), null);
     assert.equal(estimatedPayOf(50, 0), 50);
+});
+
+test('scheduled entry: the shift’s own times, with the usual break once it passes 5 hours', () => {
+    const long = scheduledEntryFor({ startTime: at('2026-10-05T09:00'), endTime: at('2026-10-05T17:00') });
+    assert.deepEqual([localTime(long.clockIn), localTime(long.clockOut), long.breakMinutes, long.paidMinutes], ['2026-10-05T09:00', '2026-10-05T17:00', 30, 450]);
+    const short = scheduledEntryFor({ startTime: at('2026-10-05T09:00'), endTime: at('2026-10-05T13:00') });
+    assert.deepEqual([short.breakMinutes, short.paidMinutes], [0, 240]);
+});
+
+test('features: unchosen ones are their defaults, unknown keys are dropped', () => {
+    assert.deepEqual(resolveFeatures({}), { leaveBy: true, weather: true, timesheet: false, pay: false, sharedOnHome: true, calendarSummary: true, autoHours: false });
+    assert.equal(resolveFeatures(null).weather, true);
+    const resolved = resolveFeatures({ timesheet: true, weather: false, junk: true, pay: 'yes' });
+    assert.deepEqual([resolved.timesheet, resolved.weather, resolved.pay, 'junk' in resolved], [true, false, false, false]);
+});
+
+test('features: a change keeps the other choices; hours add themselves only with the timesheet on', () => {
+    assert.deepEqual(mergeFeatures({ timesheet: true, junk: 1 }, { weather: false }), { timesheet: true, weather: false });
+    assert.equal(addsHoursByItself(resolveFeatures({ autoHours: true })), false);
+    assert.equal(addsHoursByItself(resolveFeatures({ autoHours: true, timesheet: true })), true);
+});
+
+test('features: the profile takes known switches as booleans only', () => {
+    assert.deepEqual(updateProfileSchema.parse({ features: { pay: true } }), { features: { pay: true } });
+    assert.equal(updateProfileSchema.safeParse({ features: { pay: 'on' } }).success, false);
+    assert.equal(updateProfileSchema.safeParse({ features: { dragons: true } }).success, false);
 });

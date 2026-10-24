@@ -2,6 +2,9 @@ const bcrypt = require('bcryptjs');
 const { OAuth2Client } = require('google-auth-library');
 const appleSignin = require('apple-signin-auth');
 const prisma = require('../config/prisma');
+const { withUserLock } = require('../utils/withUserLock');
+const { resolveFeatures, mergeFeatures, addsHoursByItself } = require('../domain/features');
+const { addScheduledHours } = require('./timesheet.service');
 const env = require('../config/env');
 const ApiError = require('../utils/ApiError');
 const { MAX_CODE_ATTEMPTS, generateCode, hashCode, codeExpiry, codeMatches } = require('../utils/oneTimeCode');
@@ -30,6 +33,7 @@ const toPublicUser = (user) => ({
     taxDeductionPercent: user.taxDeductionPercent,
     commuteMode: user.commuteMode,
     arrivalBufferMinutes: user.arrivalBufferMinutes,
+    features: resolveFeatures(user.features),
     homeLocation:
         user.homeLatitude != null && user.homeLongitude != null
             ? { address: user.homeAddress, latitude: user.homeLatitude, longitude: user.homeLongitude }
@@ -208,7 +212,21 @@ const restoreAccount = async ({ restoreToken }, context) => {
     return signIn({ ...user, deletionRequestedAt: null }, context);
 };
 
-const updateProfile = async (userId, data) => toPublicUser(await prisma.user.update({ where: { id: userId }, data }));
+const updateProfile = async (userId, { features, ...data }) => {
+    let user;
+    if (features) {
+        // Read-merge-write under the user's lock, so two switches flipped at once both stick
+        user = await withUserLock(userId, async (tx) => {
+            const { features: stored } = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { features: true } });
+            return tx.user.update({ where: { id: userId }, data: { ...data, features: mergeFeatures(stored, features) } });
+        });
+        // Just switched on: shifts already waiting for hours are filled in now, not at the next hourly run
+        if (addsHoursByItself(resolveFeatures(user.features))) await addScheduledHours(userId);
+    } else {
+        user = await prisma.user.update({ where: { id: userId }, data });
+    }
+    return toPublicUser(user);
+};
 
 const getPublicUser = async (userId) => toPublicUser(await findUserOrThrow(userId));
 

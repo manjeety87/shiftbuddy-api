@@ -59,6 +59,28 @@ module.exports = {
             responses: { ...ok('Open entry (or null)', { ...ref('TimeEntry'), nullable: true }) },
         }),
     },
+    '/timesheet/unlogged': {
+        get: op({
+            tag,
+            summary: 'Finished shifts waiting for hours',
+            description:
+                'What Home asks about (“Add your hours?”): shifts that ended in the last 7 days with no entry and not marked missed, oldest ' +
+                'first, each with `suggested` — its scheduled start and end and the usual break. Saving one is POST /timesheet with the ' +
+                '`shiftId`. Empty while `features.timesheet` is off, and while `features.autoHours` is on (an hourly run adds them by itself).',
+            responses: {
+                ...ok('Shifts and suggested entries', {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            shift: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, startTime: { type: 'string', format: 'date-time' }, endTime: { type: 'string', format: 'date-time' }, job: { type: 'object' } } },
+                            suggested: { type: 'object', properties: { clockIn: { type: 'string', format: 'date-time' }, clockOut: { type: 'string', format: 'date-time' }, breakMinutes: { type: 'integer' }, paidMinutes: { type: 'integer' } } },
+                        },
+                    },
+                }),
+            },
+        }),
+    },
     '/timesheet/clock-in': {
         post: op({
             tag, body: v.clockInSchema,

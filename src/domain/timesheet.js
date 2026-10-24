@@ -155,4 +155,17 @@ const summarizeAcrossJobs = (entries) => {
     };
 };
 
-module.exports = { CLOCK_IN_EARLY_MINUTES, SUMMARY_RANGES, clockInWindow, weekOn, summaryRangeOn, estimatedPayOf, summarizeAcrossJobs, BREAK_AFTER_MINUTES, BREAK_MINUTES, autoBreakMinutes, paidMinutes, payPeriodOn, summarizeEntries };
+/** How far back a finished shift without hours is still offered ("Add your hours?") or filled in by itself. */
+const UNLOGGED_DAYS = 7;
+
+/**
+ * The entry a scheduled shift would have if it went exactly to plan: its own start
+ * and end, and the usual unpaid break. What "Add your hours?" suggests, and what
+ * adding hours by themselves saves.
+ */
+const scheduledEntryFor = (shift) => {
+    const breakMinutes = autoBreakMinutes(shift.startTime, shift.endTime);
+    return { clockIn: shift.startTime, clockOut: shift.endTime, breakMinutes, paidMinutes: paidMinutes({ clockIn: shift.startTime, clockOut: shift.endTime, breakMinutes }) };
+};
+
+module.exports = { UNLOGGED_DAYS, scheduledEntryFor, CLOCK_IN_EARLY_MINUTES, SUMMARY_RANGES, clockInWindow, weekOn, summaryRangeOn, estimatedPayOf, summarizeAcrossJobs, BREAK_AFTER_MINUTES, BREAK_MINUTES, autoBreakMinutes, paidMinutes, payPeriodOn, summarizeEntries };

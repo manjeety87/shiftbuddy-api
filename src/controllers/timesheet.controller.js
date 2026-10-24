@@ -52,4 +52,9 @@ const deleteEntry = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, null, 'Time entry deleted'));
 });
 
-module.exports = { getSummary, getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry };
+const getUnlogged = asyncHandler(async (req, res) => {
+    const unlogged = await timesheetService.getUnlogged(req.user.id);
+    res.status(200).json(new ApiResponse(200, unlogged, 'Shifts waiting for hours'));
+});
+
+module.exports = { getUnlogged, getSummary, getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry };

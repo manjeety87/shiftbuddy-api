@@ -102,10 +102,12 @@ module.exports = {
     '/auth/profile': {
         patch: op({
             tag, body: u.updateProfileSchema,
-            summary: 'Update name, tax estimate, commute mode or arrival buffer',
+            summary: 'Update name, tax estimate, commute mode, arrival buffer or features',
             description:
                 'Send only what changes. `commuteMode` drives travel conflicts and leave-by times; ' +
-                '`arrivalBufferMinutes` (whole minutes, 0–120) is how early routes plan to get you to a shift.',
+                '`arrivalBufferMinutes` (whole minutes, 0–120) is how early routes plan to get you to a shift. ' +
+                '`features` switches parts of the app on or off — only the keys sent change. Turning `autoHours` on (with the ' +
+                'timesheet on) adds the hours of shifts already waiting at once.',
             responses: { ...ok('Updated user', ref('User')), ...errors.validation },
         }),
     },
