@@ -227,6 +227,7 @@ request
 | `RESEND_API_KEY` | email codes |
 | `API_CONTACT_EMAIL` | User-Agent for the open-data services |
 | `API_DOCS` | `true` to serve /api/docs outside development |
+| `RATE_LIMIT_SCALE` | multiplies every rate limit (local browser tests sign in many accounts from one IP); ignored in production |
 
 ## 8. Scripts
 

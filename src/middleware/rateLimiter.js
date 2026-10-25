@@ -1,4 +1,5 @@
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
+const env = require('../config/env');
 
 const MINUTE_MS = 60 * 1000;
 
@@ -10,7 +11,7 @@ const MINUTE_MS = 60 * 1000;
 const createLimiter = ({ windowMs, max, message }) =>
     rateLimit({
         windowMs,
-        max,
+        max: max * env.rateLimitScale,
         standardHeaders: true,
         legacyHeaders: false,
         keyGenerator: (req) => req.user?.id ?? ipKeyGenerator(req.ip),

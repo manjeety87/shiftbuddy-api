@@ -41,6 +41,9 @@ const schema = z.object({
     RESEND_API_KEY: z.string().optional(),
     API_CONTACT_EMAIL: z.string().default('shiftbuddy-app'),
     API_DOCS: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
+    // Multiplies every rate limit, for the web app's browser tests: all their accounts sign in
+    // from one IP and would hit the sign-in limit. Ignored in production.
+    RATE_LIMIT_SCALE: z.coerce.number().int().min(1).max(100).default(1),
 });
 
 // An empty line in .env (`KEY=`) means "not set", not an empty string
@@ -60,5 +63,6 @@ module.exports = Object.freeze({
     ...env,
     isDevelopment: env.NODE_ENV === 'development',
     isProduction: env.NODE_ENV === 'production',
+    rateLimitScale: env.NODE_ENV === 'production' ? 1 : env.RATE_LIMIT_SCALE,
     corsAllowsAnyOrigin: env.CORS_ORIGIN.length === 0 || env.CORS_ORIGIN.includes('*'),
 });
