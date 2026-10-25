@@ -47,6 +47,8 @@ src/
   domain/              the rules as pure functions (overlaps, copy planning, pay summary,
                        travel pairs, schedule message). No database, no Express — this is
                        the code the web app can share. Tested in test/ (npm test).
+  pdf/                 documents drawn with pdfkit (the timesheet statement); data comes in
+                       ready-made from domain/, nothing here decides a number
   validation/          zod schemas (also the source of the API docs' request shapes)
   constants/           plain values shared by schemas and services
   middleware/          auth (JWT), validate, rate limiters, OCR usage limit, notFound

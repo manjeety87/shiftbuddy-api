@@ -5,6 +5,9 @@ const { withUserLock } = require('../utils/withUserLock');
 const { MAX_SHIFT_HOURS, NOT_MISSED } = require('../constants/shifts');
 const { resolveFeatures, addsHoursByItself } = require('../domain/features');
 const { mapWithLimit } = require('../utils/mapWithLimit');
+const { buildStatement } = require('../domain/statement');
+const { jobName } = require('../domain/jobLabels');
+const { renderStatementPdf } = require('../pdf/statementPdf');
 const { UNLOGGED_DAYS, scheduledEntryFor, autoBreakMinutes, clockInWindow, payPeriodOn, summarizeAcrossJobs, summarizeEntries, weekOn, summaryRangeOn, estimatedPayOf } = require('../domain/timesheet');
 
 // The timesheet: clocking in and out, adding or fixing an entry by hand, and the
@@ -271,4 +274,40 @@ const getSummary = async (userId, { range, offset, timeZone }) => {
     };
 };
 
-module.exports = { getCurrentEntry, clockIn, clockOut, createEntry, getEntry, updateEntry, deleteEntry, getTimesheet, getWeekTimesheet, getSummary, getUnlogged, addScheduledHours, scheduleAutomaticHours };
+/**
+ * The hours for a stretch as a PDF to keep or send: every job for a week, two
+ * weeks or a month, or one job's pay period (`jobId`) — the one to hold next to
+ * that job's pay stub. With the year so far (January 1 to the period's end).
+ * Pay only while the user's pay estimates are on. Answers { pdf, filename }.
+ */
+const getStatement = async (userId, { jobId, range, offset, timeZone }) => {
+    const [user, job] = await Promise.all([
+        prisma.user.findUnique({ where: { id: userId }, select: { name: true, taxDeductionPercent: true, features: true } }),
+        jobId ? prisma.job.findFirst({ where: { id: jobId, userId } }) : null,
+    ]);
+    if (jobId && !job) throw new ApiError(404, 'Job not found');
+
+    const span = job ? payPeriodOn(new Date(), job, timeZone, offset) : summaryRangeOn(range, new Date(), timeZone, offset);
+    const yearStart = span.end.minus({ days: 1 }).startOf('year');
+    const scope = { userId, ...(jobId && { jobId }) };
+    const yearEntries = await prisma.timeEntry.findMany({
+        where: { ...scope, clockIn: { gte: yearStart.toJSDate(), lt: span.end.toJSDate() } },
+        include: withJob,
+    });
+    const entries = yearEntries.filter((entry) => entry.clockIn >= span.start.toJSDate());
+
+    const statement = buildStatement({ entries, yearEntries, taxDeductionPercent: user.taxDeductionPercent, showPay: resolveFeatures(user.features).pay });
+    const period = daysOf(span);
+    const pdf = await renderStatementPdf({
+        statement,
+        personName: user.name,
+        scope: job ? [jobName(job), job.companyName?.trim() && job.title].filter(Boolean).join(' · ') : 'All jobs',
+        period,
+        payday: span.payday?.toISODate() ?? null,
+        timeZone,
+        preparedAt: new Date(),
+    });
+    return { pdf, filename: `shiftbuddy-hours-${period.start}-to-${period.end}.pdf` };
+};
+
+module.exports = { getStatement, getCurrentEntry, clockIn, clockOut, createEntry, getEntry, updateEntry, deleteEntry, getTimesheet, getWeekTimesheet, getSummary, getUnlogged, addScheduledHours, scheduleAutomaticHours };

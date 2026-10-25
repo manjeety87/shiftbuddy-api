@@ -57,4 +57,10 @@ const getUnlogged = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, unlogged, 'Shifts waiting for hours'));
 });
 
-module.exports = { getUnlogged, getSummary, getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry };
+// A file, not JSON: errors before this point still answer in the usual shape
+const getStatement = asyncHandler(async (req, res) => {
+    const { pdf, filename } = await timesheetService.getStatement(req.user.id, req.validated.query);
+    res.status(200).type('application/pdf').attachment(filename).set('Cache-Control', 'no-store').send(pdf);
+});
+
+module.exports = { getStatement, getUnlogged, getSummary, getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry };
