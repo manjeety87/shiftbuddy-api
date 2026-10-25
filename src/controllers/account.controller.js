@@ -23,17 +23,10 @@ const getSummary = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, summary, 'Account summary fetched'));
 });
 
-const exportAccount = asyncHandler(async (req, res) => {
-    const data = await accountService.exportAccount(req.user.id);
-    // A copy of someone's whole account: never kept by a browser or proxy cache
-    res.set('Cache-Control', 'no-store');
-    res.status(200).json(new ApiResponse(200, data, 'Your data'));
-});
-
 const requestDeletion = asyncHandler(async (req, res) => {
     const result = await accountService.requestDeletion(req.user.id, req.body);
     clearRefreshCookie(res);
     res.status(200).json(new ApiResponse(200, result, 'Your account will be deleted'));
 });
 
-module.exports = { listSessions, endSession, endOtherSessions, getSummary, exportAccount, requestDeletion };
+module.exports = { listSessions, endSession, endOtherSessions, getSummary, requestDeletion };

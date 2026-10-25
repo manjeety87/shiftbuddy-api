@@ -50,6 +50,23 @@ module.exports = {
             responses: { ...ok('Summary', ref('PaySummary')), ...errors.validation },
         }),
     },
+    '/shifts/statement': {
+        get: op({
+            tag, query: v.statementQuerySchema,
+            summary: 'The shifts worked in a stretch, as a PDF statement',
+            description:
+                'Like a bank’s e-statement, in plain text: every finished, not-missed shift starting in the stretch (oldest first) with its ' +
+                'job, title, start, end, break and hours — clocked hours when the shift has them, else its scheduled times with the usual ' +
+                'break — plus hours typed in without a shift; then hours (and pay) by job and a summary. Stretches: `week`, `twoWeeks`, ' +
+                '`month`, `threeMonths` (this month and the two before; `offset` steps back), or `custom` with `from`/`to` (at most a year). ' +
+                '`jobId` keeps one job. Money only while `features.pay` is on; no ids, notes, places or emails. Answers `application/pdf` ' +
+                'as an attachment; errors are JSON as usual. Limited to 60 an hour.',
+            responses: {
+                200: { description: 'The statement', content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } } },
+                ...errors.validation, ...errors.notFound, ...errors.rateLimited,
+            },
+        }),
+    },
     '/shifts/schedule-message': {
         get: op({
             tag, query: v.scheduleMessageQuerySchema,

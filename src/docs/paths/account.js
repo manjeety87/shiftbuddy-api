@@ -67,16 +67,6 @@ module.exports = {
             },
         }),
     },
-    '/account/export': {
-        get: op({
-            tag,
-            summary: 'Download a copy of your data',
-            description:
-                'Profile, jobs, shifts, hours worked and sharing, as one JSON document (times in UTC). Password and token hashes and ' +
-                'one-time codes are never included. Sent with `Cache-Control: no-store`. Limited to 10 an hour.',
-            responses: { ...ok('Everything in the account', { type: 'object' }), ...errors.rateLimited },
-        }),
-    },
     '/account/deletion': {
         post: op({
             tag,

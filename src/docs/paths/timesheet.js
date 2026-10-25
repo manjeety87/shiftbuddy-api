@@ -51,22 +51,6 @@ module.exports = {
             responses: { ...ok('The summary', { type: 'object' }), ...errors.validation },
         }),
     },
-    '/timesheet/statement': {
-        get: op({
-            tag, query: v.statementQuerySchema,
-            summary: 'The hours for a stretch as a PDF statement',
-            description:
-                'A file to keep or send, built only from what the app knows: per job the hourly rate, paid hours (decimal, like a pay stub), ' +
-                'gross pay and the same since January 1; gross less the user’s `taxDeductionPercent`; then every entry, oldest first. With ' +
-                '`jobId` it covers that job’s pay period (`offset` steps between periods) — the one to compare with its pay stub; without, ' +
-                'every job for `range`. No money at all while `features.pay` is off; no stat holiday, vacation pay, CPP, EI or tax lines. ' +
-                'Answers `application/pdf` as an attachment; errors are JSON as usual.',
-            responses: {
-                200: { description: 'The statement', content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } } },
-                ...errors.validation, ...errors.notFound, ...errors.rateLimited,
-            },
-        }),
-    },
     '/timesheet/current': {
         get: op({
             tag,

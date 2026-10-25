@@ -2,7 +2,6 @@ const bcrypt = require('bcryptjs');
 const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
 const { endAllSessionsQuery } = require('./session.service');
-const { toPublicUser } = require('./auth.service');
 const { sendDeletionScheduledEmail } = require('./email.service');
 const { DELETE_CONFIRMATION, DELETION_GRACE_DAYS, purgeDateFor, purgeCutoff, describeDevice } = require('../domain/account');
 
@@ -39,47 +38,6 @@ const endOtherSessions = async (userId, currentSessionId) => {
     // The old single token (phones from before sessions) is "another device" too
     await prisma.user.update({ where: { id: userId }, data: { refreshToken: null } });
     return { signedOut: count };
-};
-
-// ─── Your data ────────────────────────────────────────────────────────────
-
-/**
- * Everything the account holds, in one JSON document people can keep. Ids are
- * kept so shifts and hours can be matched to their job; secrets (password and
- * token hashes, one-time codes) never leave the database.
- */
-const exportAccount = async (userId) => {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new ApiError(401, 'User no longer exists');
-
-    const [jobs, shifts, timeEntries, sharesGiven, sharesReceived] = await Promise.all([
-        prisma.job.findMany({ where: { userId }, omit: { userId: true }, orderBy: { createdAt: 'asc' } }),
-        prisma.shift.findMany({ where: { userId }, omit: { userId: true }, orderBy: { startTime: 'asc' } }),
-        prisma.timeEntry.findMany({ where: { userId }, omit: { userId: true }, orderBy: { clockIn: 'asc' } }),
-        prisma.shareGrant.findMany({
-            where: { ownerId: userId },
-            select: { inviteEmail: true, expiresAt: true, revokedAt: true, createdAt: true, grantee: { select: { name: true } } },
-            orderBy: { createdAt: 'asc' },
-        }),
-        prisma.shareGrant.findMany({
-            where: { granteeId: userId },
-            select: { expiresAt: true, revokedAt: true, createdAt: true, owner: { select: { name: true, email: true } } },
-            orderBy: { createdAt: 'asc' },
-        }),
-    ]);
-
-    return {
-        exportedAt: new Date().toISOString(),
-        format: 'ShiftBuddy data export, version 1. Times are UTC (ISO 8601).',
-        account: { ...toPublicUser(user), createdAt: user.createdAt },
-        jobs,
-        shifts,
-        timeEntries,
-        sharing: {
-            withOthers: sharesGiven.map(({ inviteEmail, grantee, ...grant }) => ({ email: inviteEmail, name: grantee?.name ?? null, ...grant })),
-            withMe: sharesReceived.map(({ owner, ...grant }) => ({ name: owner.name, email: owner.email, ...grant })),
-        },
-    };
 };
 
 /** How much is in the account — said in words before someone deletes it. */
@@ -142,4 +100,4 @@ const schedulePurge = () => {
     setInterval(run, HOUR_MS).unref();
 };
 
-module.exports = { listSessions, endSessionOf, endOtherSessions, exportAccount, accountSummary, requestDeletion, purgeExpiredAccounts, schedulePurge };
+module.exports = { listSessions, endSessionOf, endOtherSessions, accountSummary, requestDeletion, purgeExpiredAccounts, schedulePurge };

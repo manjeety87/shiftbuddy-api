@@ -45,10 +45,7 @@ const inviteLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 30, message
 // Each scan is a paid Gemini call; nobody scans this many schedules by hand
 const ocrLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 30, message: 'Too many scans. Please try again later.' });
 
-// A full copy of the account is a big query; nobody needs it more than a few times an hour
-const exportLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 10, message: 'Too many downloads. Please try again later.' });
-
-// Each PDF statement is drawn on the server; stepping back through a year of periods stays well inside this
+// Each PDF statement is drawn on the server; trying a few stretches stays well inside this
 const statementLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 60, message: 'Too many PDFs at once. Please try again in a little while.' });
 
 module.exports = {
@@ -61,6 +58,5 @@ module.exports = {
     weatherLimiter,
     inviteLimiter,
     ocrLimiter,
-    exportLimiter,
     statementLimiter,
 };

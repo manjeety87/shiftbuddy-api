@@ -183,6 +183,8 @@ model TimeEntry {
 
   @@index([userId, clockIn])
   @@index([jobId, clockIn])
+  // A shift's hours are fetched by shift (the statement, Shifts → Past, "Add your hours?")
+  @@index([shiftId])
   @@map("time_entries")
 }
 

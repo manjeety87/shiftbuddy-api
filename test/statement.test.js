@@ -4,50 +4,57 @@ process.env.TZ = 'America/Toronto';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime } = require('luxon');
-const { buildStatement } = require('../src/domain/statement');
+const { buildStatement, statementSpan } = require('../src/domain/statement');
+const { statementQuerySchema } = require('../src/validation/shift.validation');
 
-const at = (iso) => DateTime.fromISO(iso, { zone: 'America/Toronto' }).toJSDate();
+const ZONE = 'America/Toronto';
+const at = (iso) => DateTime.fromISO(iso, { zone: ZONE }).toJSDate();
 const boathouse = { id: 'b', title: 'Key Holder', companyName: 'Boathouse', hourlyRate: 19.3 };
 const cafe = { id: 'c', title: 'Barista', companyName: '', hourlyRate: null };
-const entry = (job, start, end, breakMinutes = 0) => ({ jobId: job.id, job, clockIn: at(start), clockOut: end && at(end), breakMinutes });
+const shift = (job, start, end, entry) => ({ job, startTime: at(start), endTime: at(end), timeEntries: entry ? [{ clockIn: at(entry[0]), clockOut: at(entry[1]), breakMinutes: entry[2] }] : [] });
 
-// The period: 7.5 h + 4 h at Boathouse, 3 h at the cafe, and one still on the clock
-const period = [
-    entry(boathouse, '2026-10-14T09:00', '2026-10-14T17:00', 30),
-    entry(cafe, '2026-10-12T18:00', '2026-10-12T21:00'),
-    entry(boathouse, '2026-10-13T12:00', '2026-10-13T16:00'),
-    entry(boathouse, '2026-10-15T09:00', null),
+// Boathouse: one clocked 7.5 h (8 h less a 30 min break), one 4 h from the schedule; the cafe: 3 h typed in without a shift
+const shifts = [
+    shift(boathouse, '2026-10-14T09:00', '2026-10-14T17:00', ['2026-10-14T09:00', '2026-10-14T17:00', 30]),
+    shift(boathouse, '2026-10-13T12:00', '2026-10-13T16:00'),
 ];
-// Earlier in the year: 10 more hours at Boathouse
-const year = [...period, entry(boathouse, '2026-03-02T08:00', '2026-03-02T18:00')];
+const looseEntries = [{ job: cafe, clockIn: at('2026-10-12T18:00'), clockOut: at('2026-10-12T21:00'), breakMinutes: 0 }];
 
-test('statement: hours and pay per job, the year so far, and the deduction estimate', () => {
-    const statement = buildStatement({ entries: period, yearEntries: year, taxDeductionPercent: 15, showPay: true });
-    const [first, second] = statement.jobs;
+test('statement: every shift oldest first, clocked hours over the schedule, totals per job', () => {
+    const statement = buildStatement({ shifts, looseEntries, taxDeductionPercent: 15, showPay: true });
 
     assert.deepEqual(
-        { name: first.name, role: first.role, rate: first.hourlyRate, minutes: first.paidMinutes, gross: first.grossPay, year: first.year },
-        { name: 'Boathouse', role: 'Key Holder', rate: 19.3, minutes: 690, gross: 221.95, year: { paidMinutes: 1290, grossPay: 414.95 } },
+        statement.rows.map((row) => [row.jobName, row.role, row.paidMinutes, row.source]),
+        [['Barista', null, 180, 'clocked'], ['Boathouse', 'Key Holder', 240, 'scheduled'], ['Boathouse', 'Key Holder', 450, 'clocked']],
     );
-    // A job without a company is named by its title and has no separate role; no rate, no money
-    assert.deepEqual({ name: second.name, role: second.role, gross: second.grossPay }, { name: 'Barista', role: null, gross: null });
-
-    assert.equal(statement.totals.grossPay, 221.95);
-    assert.equal(statement.totals.takeHome, 188.66);
-    assert.equal(statement.totals.deductions, 33.29);
-    assert.equal(statement.totals.missingRates, true);
-    assert.equal(statement.totals.entryCount, 3); // the open entry isn't counted
-});
-
-test('statement: entries oldest first, the open one listed without hours', () => {
-    const { entries } = buildStatement({ entries: period, yearEntries: year, taxDeductionPercent: 0, showPay: true });
-    assert.deepEqual(entries.map((row) => [row.jobName, row.paidMinutes]), [['Barista', 180], ['Boathouse', 240], ['Boathouse', 450], ['Boathouse', null]]);
+    assert.deepEqual(statement.jobs[0], { name: 'Boathouse', role: 'Key Holder', shiftCount: 2, paidMinutes: 690, hourlyRate: 19.3, grossPay: 221.95 });
+    // A job without a rate has no money, and says so in the totals
+    assert.equal(statement.jobs[1].grossPay, null);
+    assert.deepEqual(statement.totals, { shiftCount: 3, scheduledCount: 1, paidMinutes: 870, grossPay: 221.95, deductions: 33.29, takeHome: 188.66, missingRates: true });
 });
 
 test('statement: with pay estimates off there is no money anywhere', () => {
-    const statement = buildStatement({ entries: period, yearEntries: year, taxDeductionPercent: 15, showPay: false });
-    const money = [statement.totals.grossPay, statement.totals.takeHome, statement.totals.deductions, statement.totals.year.grossPay, ...statement.jobs.flatMap((job) => [job.hourlyRate, job.grossPay, job.year.grossPay])];
+    const { jobs, totals } = buildStatement({ shifts, looseEntries, taxDeductionPercent: 15, showPay: false });
+    const money = [totals.grossPay, totals.takeHome, totals.deductions, ...jobs.flatMap((job) => [job.hourlyRate, job.grossPay])];
     assert.ok(money.every((value) => value === null));
-    assert.equal(statement.totals.missingRates, false);
-    assert.equal(statement.totals.paidMinutes, 870);
+    assert.equal(totals.missingRates, false);
+});
+
+test('statement span: presets in the user’s zone, three months, and a custom range with both days included', () => {
+    const now = at('2026-10-25T10:00'); // a Sunday
+    const days = ({ start, end }) => [start.toISODate(), end.toISODate()];
+    assert.deepEqual(days(statementSpan({ range: 'week' }, now, ZONE)), ['2026-10-25', '2026-11-01']);
+    assert.deepEqual(days(statementSpan({ range: 'month', offset: -1 }, now, ZONE)), ['2026-09-01', '2026-10-01']);
+    assert.deepEqual(days(statementSpan({ range: 'threeMonths' }, now, ZONE)), ['2026-08-01', '2026-11-01']);
+    assert.deepEqual(days(statementSpan({ range: 'threeMonths', offset: -1 }, now, ZONE)), ['2026-05-01', '2026-08-01']);
+    assert.deepEqual(days(statementSpan({ range: 'custom', from: '2026-10-01', to: '2026-10-15' }, now, ZONE)), ['2026-10-01', '2026-10-16']);
+});
+
+test('statement query: custom needs both days, in order, at most a year apart', () => {
+    const parse = (query) => statementQuerySchema.safeParse({ timeZone: ZONE, ...query }).success;
+    assert.equal(parse({ range: 'custom', from: '2026-10-01', to: '2026-10-15' }), true);
+    assert.equal(parse({ range: 'custom', from: '2026-10-01' }), false);
+    assert.equal(parse({ range: 'custom', from: '2026-10-15', to: '2026-10-01' }), false);
+    assert.equal(parse({ range: 'custom', from: '2025-01-01', to: '2026-10-01' }), false);
+    assert.equal(parse({ range: 'all' }), false);
 });

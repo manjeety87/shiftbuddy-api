@@ -1,57 +1,87 @@
+const { DateTime } = require('luxon');
 const { jobName } = require('./jobLabels');
-const { estimatedPayOf, summarizeAcrossJobs } = require('./timesheet');
+const { estimatedPayOf, paidMinutes, scheduledEntryFor, summaryRangeOn } = require('./timesheet');
 
 const round2 = (value) => Math.round(value * 100) / 100;
 
 /**
- * A statement of hours for a stretch of days: what a pay stub shows, built only
- * from what the app knows. Per job: its hourly rate, the paid hours, gross pay
- * and the same for the year so far. In total: gross, the user's own deduction
- * percentage and what that leaves. Then every entry, oldest first, to check
- * against the employer's stub.
- *
- * No stat holiday pay, vacation pay, CPP, EI or tax lines — the app can't know
- * them, so it doesn't guess. Money only while pay estimates are on (`showPay`)
- * and only for jobs with a rate; `missingRates` says some hours aren't in it.
- * `entries` and `yearEntries` carry their `job`; an entry still on the clock is
- * listed but not counted.
+ * The days a statement covers, in `timeZone`: { start, end } with `end` exclusive.
+ * The presets are the summary's stretches plus `threeMonths` (this calendar month
+ * and the two before); `offset` steps back by whole stretches. `custom` runs from
+ * the start of `from` to the end of `to`.
  */
-const buildStatement = ({ entries, yearEntries, taxDeductionPercent, showPay }) => {
-    const period = summarizeAcrossJobs(entries);
-    const year = summarizeAcrossJobs(yearEntries);
-    const yearOf = new Map(year.byJob.map((line) => [line.job.id, line]));
-    const money = (value) => (showPay ? value : null);
+const statementSpan = ({ range, offset = 0, from, to }, now, timeZone) => {
+    if (range === 'custom') {
+        return { start: DateTime.fromISO(from, { zone: timeZone }).startOf('day'), end: DateTime.fromISO(to, { zone: timeZone }).startOf('day').plus({ days: 1 }) };
+    }
+    if (range === 'threeMonths') {
+        const start = DateTime.fromJSDate(now, { zone: timeZone }).startOf('month').minus({ months: 2 }).plus({ months: 3 * offset });
+        return { start, end: start.plus({ months: 3 }) };
+    }
+    return summaryRangeOn(range, now, timeZone, offset);
+};
 
-    const jobs = period.byJob.map((line) => ({
-        name: jobName(line.job),
-        role: line.job.companyName?.trim() ? line.job.title : null,
-        hourlyRate: money(line.job.hourlyRate ?? null),
-        entryCount: line.entryCount,
-        paidMinutes: line.paidMinutes,
-        grossPay: money(line.grossPay),
-        year: { paidMinutes: yearOf.get(line.job.id)?.paidMinutes ?? 0, grossPay: money(yearOf.get(line.job.id)?.grossPay ?? null) },
-    }));
+/**
+ * A statement of the shifts worked, like a bank's e-statement: every finished
+ * shift (oldest first) with its job, role, times and hours, then the totals per
+ * job and overall. A shift's hours are the clocked ones when it has them, else
+ * its scheduled times with the usual break (`source` says which). Hours typed in
+ * without a shift (`looseEntries`) are listed too.
+ *
+ * Money only while pay estimates are on (`showPay`) and only for jobs with a
+ * rate; `missingRates` says some hours aren't in it. No stat holiday, vacation,
+ * CPP, EI or tax lines — the app can't know them, so it doesn't guess.
+ * `shifts` carry `job` and their closed `timeEntries`; `looseEntries` carry `job`.
+ */
+const buildStatement = ({ shifts, looseEntries, taxDeductionPercent, showPay }) => {
+    const rowOf = (job, worked, source) => ({
+        jobId: job.id,
+        jobName: jobName(job),
+        role: job.companyName?.trim() ? job.title : null,
+        start: worked.clockIn,
+        end: worked.clockOut,
+        breakMinutes: worked.breakMinutes,
+        paidMinutes: paidMinutes(worked),
+        source,
+    });
+    const rows = [
+        ...shifts.map((shift) => {
+            const clocked = shift.timeEntries.find((entry) => entry.clockOut);
+            return clocked ? rowOf(shift.job, clocked, 'clocked') : rowOf(shift.job, scheduledEntryFor(shift), 'scheduled');
+        }),
+        ...looseEntries.map((entry) => rowOf(entry.job, entry, 'clocked')),
+    ].sort((a, b) => a.start - b.start);
 
-    const gross = money(period.totals.grossPay);
-    const takeHome = gross == null ? null : estimatedPayOf(gross, taxDeductionPercent);
+    const jobOf = new Map([...shifts, ...looseEntries].map(({ job }) => [job.id, job]));
+    const groups = new Map();
+    for (const row of rows) groups.set(row.jobId, [...(groups.get(row.jobId) ?? []), row]);
+    const jobs = [...groups.entries()]
+        .map(([jobId, jobRows]) => {
+            const job = jobOf.get(jobId);
+            const minutes = jobRows.reduce((sum, row) => sum + row.paidMinutes, 0);
+            const rate = showPay ? (job.hourlyRate ?? null) : null;
+            return { name: jobName(job), role: job.companyName?.trim() ? job.title : null, shiftCount: jobRows.length, paidMinutes: minutes, hourlyRate: rate, grossPay: rate == null ? null : round2((minutes / 60) * rate) };
+        })
+        .sort((a, b) => b.paidMinutes - a.paidMinutes);
+
+    const paid = jobs.filter((job) => job.grossPay != null);
+    const gross = showPay && paid.length > 0 ? round2(paid.reduce((sum, job) => sum + job.grossPay, 0)) : null;
+    const takeHome = estimatedPayOf(gross, taxDeductionPercent);
     return {
         showPay,
         taxDeductionPercent,
+        rows,
         jobs,
         totals: {
-            entryCount: period.totals.entryCount,
-            paidMinutes: period.totals.paidMinutes,
-            breakMinutes: period.totals.breakMinutes,
+            shiftCount: rows.length,
+            scheduledCount: rows.filter((row) => row.source === 'scheduled').length,
+            paidMinutes: rows.reduce((sum, row) => sum + row.paidMinutes, 0),
             grossPay: gross,
             deductions: takeHome == null ? null : round2(gross - takeHome),
             takeHome,
-            missingRates: showPay && period.totals.missingRates,
-            year: { paidMinutes: year.totals.paidMinutes, grossPay: money(year.totals.grossPay) },
+            missingRates: showPay && paid.length < jobs.length,
         },
-        entries: period.entries
-            .map((entry) => ({ jobName: jobName(entry.job), clockIn: entry.clockIn, clockOut: entry.clockOut, breakMinutes: entry.breakMinutes, paidMinutes: entry.paidMinutes }))
-            .sort((a, b) => a.clockIn - b.clockIn),
     };
 };
 
-module.exports = { buildStatement };
+module.exports = { statementSpan, buildStatement };

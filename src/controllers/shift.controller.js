@@ -4,6 +4,7 @@ const shiftService = require('../services/shift.service');
 const travelConflictService = require('../services/travelConflict.service');
 const conflictService = require('../services/conflict.service');
 const scheduleMessageService = require('../services/scheduleMessage.service');
+const statementService = require('../services/statement.service');
 
 const createShift = asyncHandler(async (req, res) => {
     const shift = await shiftService.createShift(req.user.id, req.body);
@@ -71,7 +72,14 @@ const deleteShift = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, null, 'Shift deleted successfully'));
 });
 
+// A file, not JSON: errors before this point still answer in the usual shape
+const getStatement = asyncHandler(async (req, res) => {
+    const { pdf, filename } = await statementService.getStatement(req.user.id, req.validated.query);
+    res.status(200).type('application/pdf').attachment(filename).set('Cache-Control', 'no-store').send(pdf);
+});
+
 module.exports = {
+    getStatement,
     createShift,
     createShiftsBulk,
     copyShifts,

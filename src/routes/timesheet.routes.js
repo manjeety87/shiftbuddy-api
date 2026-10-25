@@ -1,10 +1,9 @@
 const express = require('express');
 const requireAuth = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
-const { statementLimiter } = require('../middleware/rateLimiter');
 const { idParams } = require('../validation/common.validation');
-const { clockInSchema, createEntrySchema, updateEntrySchema, timesheetQuerySchema, weekQuerySchema, summaryQuerySchema, statementQuerySchema } = require('../validation/timesheet.validation');
-const { getStatement, getUnlogged, getSummary, getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry } = require('../controllers/timesheet.controller');
+const { clockInSchema, createEntrySchema, updateEntrySchema, timesheetQuerySchema, weekQuerySchema, summaryQuerySchema } = require('../validation/timesheet.validation');
+const { getUnlogged, getSummary, getWeekTimesheet, createEntry, getCurrent, clockIn, clockOut, getTimesheet, getEntry, updateEntry, deleteEntry } = require('../controllers/timesheet.controller');
 
 const router = express.Router();
 const entryId = idParams('entryId');
@@ -18,7 +17,6 @@ router.get('/current', getCurrent);
 router.get('/unlogged', getUnlogged);
 router.get('/week', validate({ query: weekQuerySchema }), getWeekTimesheet);
 router.get('/summary', validate({ query: summaryQuerySchema }), getSummary);
-router.get('/statement', statementLimiter, validate({ query: statementQuerySchema }), getStatement);
 router.post('/clock-in', validate(clockInSchema), clockIn);
 router.post('/clock-out', clockOut);
 router.get('/:entryId', validate({ params: entryId }), getEntry);

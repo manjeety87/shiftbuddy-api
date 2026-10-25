@@ -1,7 +1,9 @@
 const { z } = require('zod');
+const { DateTime } = require('luxon');
 const { SCHEDULE_RANGES, NAME_STYLES } = require('../constants/scheduleMessage');
 const { MAX_SHIFT_HOURS, MAX_NOTES_LENGTH, MAX_BULK_SHIFTS, MISSED_REASONS } = require('../constants/shifts');
-const { queryDate, timeZone } = require('./common.validation');
+const { STATEMENT_RANGES, MAX_STATEMENT_DAYS } = require('../constants/statement');
+const { queryDate, timeZone, uuid } = require('./common.validation');
 
 const MAX_SHIFT_MS = MAX_SHIFT_HOURS * 60 * 60 * 1000;
 
@@ -94,7 +96,28 @@ const scheduleMessageQuerySchema = z.object({
     timeZone: timeZoneSchema,
 });
 
+// GET /shifts/statement — a preset stretch (stepped back by offset) or from–to, as a PDF
+const statementQuerySchema = z
+    .object({
+        range: z.enum(STATEMENT_RANGES).default('month').describe('week (Sun–Sat), twoWeeks (this week and last), month, threeMonths (this month and the two before) or custom'),
+        offset: z.coerce.number().int().min(-120).max(0).default(0).describe('0 = the stretch today is in, -1 = the one before; ignored for custom'),
+        from: calendarDateSchema.optional().describe('custom only: the first day'),
+        to: calendarDateSchema.optional().describe('custom only: the last day (included)'),
+        jobId: uuid('Invalid job ID').optional().describe('Only this job'),
+        timeZone: timeZoneSchema,
+    })
+    .superRefine((query, ctx) => {
+        if (query.range !== 'custom') return;
+        const from = query.from && DateTime.fromISO(query.from);
+        const to = query.to && DateTime.fromISO(query.to);
+        if (!from?.isValid || !to?.isValid) return ctx.addIssue({ code: 'custom', path: ['from'], message: 'Pick a first and a last day' });
+        const days = to.diff(from, 'days').days;
+        if (days < 0) ctx.addIssue({ code: 'custom', path: ['to'], message: 'The last day is before the first' });
+        else if (days >= MAX_STATEMENT_DAYS) ctx.addIssue({ code: 'custom', path: ['to'], message: 'A statement covers at most a year' });
+    });
+
 module.exports = {
+    statementQuerySchema,
     shiftFilterQuerySchema,
     copyShiftsSchema,
     scheduleMessageQuerySchema,

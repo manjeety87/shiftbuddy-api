@@ -4,13 +4,13 @@ const { getLeavePlan, getShiftRoutes } = require('../controllers/commute.control
 const requireAuth = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const { getShiftWeather } = require('../controllers/weather.controller');
-const { commuteLimiter, weatherLimiter } = require('../middleware/rateLimiter');
+const { commuteLimiter, weatherLimiter, statementLimiter } = require('../middleware/rateLimiter');
 const { idParams } = require('../validation/common.validation');
 const { leavePlanQuerySchema, routesQuerySchema } = require('../validation/commute.validation');
-const { createShiftSchema, bulkCreateShiftsSchema, copyShiftsSchema, updateShiftSchema, shiftFilterQuerySchema, travelConflictsQuerySchema, scheduleMessageQuerySchema, markMissedSchema } = require('../validation/shift.validation');
+const { createShiftSchema, bulkCreateShiftsSchema, copyShiftsSchema, updateShiftSchema, shiftFilterQuerySchema, travelConflictsQuerySchema, scheduleMessageQuerySchema, markMissedSchema, statementQuerySchema } = require('../validation/shift.validation');
 
 const router = express.Router();
-const { createShift, createShiftsBulk, copyShifts, getConflicts, getScheduleMessage, getTravelConflicts, getMyShifts, getShiftById, updateShift, deleteShift, markMissed, clearMissed, getShiftsSummary } = shiftController;
+const { getStatement, createShift, createShiftsBulk, copyShifts, getConflicts, getScheduleMessage, getTravelConflicts, getMyShifts, getShiftById, updateShift, deleteShift, markMissed, clearMissed, getShiftsSummary } = shiftController;
 const shiftId = idParams('shiftId');
 
 router.use(requireAuth);
@@ -21,6 +21,7 @@ router.post('/copy', validate(copyShiftsSchema), copyShifts);
 
 // Literal paths come before /:shiftId so they aren't read as an id
 router.get('/summary', validate({ query: shiftFilterQuerySchema }), getShiftsSummary);
+router.get('/statement', statementLimiter, validate({ query: statementQuerySchema }), getStatement);
 router.get('/schedule-message', validate({ query: scheduleMessageQuerySchema }), getScheduleMessage);
 // Both of these plan routes between jobs, so they share the routing allowance
 router.get('/conflicts', commuteLimiter, validate({ query: travelConflictsQuerySchema }), getConflicts);

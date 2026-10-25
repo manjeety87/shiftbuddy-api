@@ -50,12 +50,4 @@ const summaryQuerySchema = z.object({
     timeZone: timeZone(),
 });
 
-// GET /timesheet/statement — the same stretches as the summary (not all time), or one job's pay period
-const statementQuerySchema = z.object({
-    jobId: uuid('Invalid job ID').optional().describe('One job by its pay period; without it, every job for `range`'),
-    range: z.enum(SUMMARY_RANGES.filter((range) => range !== 'all')).default('week').describe('week (Sun–Sat), twoWeeks (this week and last) or month; ignored with jobId'),
-    offset: z.coerce.number().int().min(-520).max(0).default(0).describe('0 = the period today is in, -1 = the one before'),
-    timeZone: timeZone(),
-});
-
-module.exports = { statementQuerySchema, createEntrySchema, summaryQuerySchema, weekQuerySchema, clockInSchema, updateEntrySchema, timesheetQuerySchema };
+module.exports = { createEntrySchema, summaryQuerySchema, weekQuerySchema, clockInSchema, updateEntrySchema, timesheetQuerySchema };
