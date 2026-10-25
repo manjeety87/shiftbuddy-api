@@ -1,32 +1,32 @@
 const PDFDocument = require('pdfkit');
 const { DateTime } = require('luxon');
 
-// Letter paper (Canada). Plain on purpose, like a bank's e-statement: black text,
-// grey for the small print, thin rules under headings — no colour, no boxes.
+// Letter paper (Canada), the app's calm palette: ink, a muted grey, hairlines and the sage accent
 const PAGE = { width: 612, height: 792, margin: 48 };
 const WIDTH = PAGE.width - 2 * PAGE.margin;
-const FOOTER_HEIGHT = 40;
-const COLOR = { ink: '#000000', muted: '#555555', rule: '#bbbbbb' };
+const FOOTER_HEIGHT = 44;
+const COLOR = { ink: '#23201c', muted: '#6f6a63', rule: '#e4dfd6', soft: '#f6f3ee', accent: '#527558' };
 
 const money = new Intl.NumberFormat('en-CA', { style: 'currency', currency: 'CAD' });
-const formatMoney = (value) => (value == null ? '-' : money.format(value));
+const formatMoney = (value) => (value == null ? '—' : money.format(value));
 // Decimal hours, the way pay stubs count them, so the two can be compared line by line
 const formatHours = (minutes) => (minutes / 60).toFixed(2);
-const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
 
 /**
- * The statement (`domain/statement.js`) as a PDF: who and which days, a summary in
- * plain sentences, hours (and pay) by job, then every shift. Dates and times are in
- * the user's `timeZone`; `period` is { start, end } as ISO dates, both included.
- * Resolves to a Buffer.
+ * The statement (`domain/statement.js`) as a PDF: a header with the period, three
+ * figures, hours (and pay) by job, the deduction estimate, then every shift with
+ * its job, title and times. Dates and times are in the user's `timeZone`; `period`
+ * is { start, end } as ISO dates, both included. Resolves to a Buffer.
  */
 const renderStatementPdf = ({ statement, personName, scope, period, timeZone, preparedAt }) =>
     new Promise((resolve, reject) => {
+        const { showPay, totals, jobs, rows } = statement;
+        const title = showPay ? 'Hours & Pay Statement' : 'Hours Statement';
         const doc = new PDFDocument({
             size: 'LETTER',
             margins: { top: PAGE.margin, bottom: PAGE.margin + FOOTER_HEIGHT, left: PAGE.margin, right: PAGE.margin },
             bufferPages: true,
-            info: { Title: `Shift statement, ${period.start} to ${period.end}`, Author: 'ShiftBuddy' },
+            info: { Title: `${title}, ${period.start} to ${period.end}`, Author: 'ShiftBuddy' },
         });
         const chunks = [];
         doc.on('data', (chunk) => chunks.push(chunk));
@@ -34,116 +34,157 @@ const renderStatementPdf = ({ statement, personName, scope, period, timeZone, pr
         doc.on('error', reject);
 
         const zoned = (date) => DateTime.fromJSDate(date, { zone: timeZone });
-        const day = (iso) => DateTime.fromISO(iso, { zone: timeZone }).toFormat('LLLL d, yyyy');
+        const startDay = DateTime.fromISO(period.start, { zone: timeZone });
+        const endDay = DateTime.fromISO(period.end, { zone: timeZone });
+        // The year is said once in the header, unless the statement runs across two
+        const acrossYears = startDay.year !== endDay.year;
         const left = PAGE.margin;
         const bottom = PAGE.height - PAGE.margin - FOOTER_HEIGHT;
-        let y = PAGE.margin;
 
-        const text = (value, x, top, { size = 10, bold = false, color = COLOR.ink, width, align = 'left' } = {}) =>
-            doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(color).text(value, x, top, { width, align, lineBreak: false, ellipsis: true, height: size + 4 });
-        const rule = (top) => doc.moveTo(left, top).lineTo(left + WIDTH, top).lineWidth(0.5).strokeColor(COLOR.rule).stroke();
-        const roomFor = (height) => {
-            if (y + height <= bottom) return;
-            doc.addPage();
-            y = PAGE.margin;
-        };
-        const heading = (label) => {
-            roomFor(60);
-            y += 14;
-            text(label, left, y, { size: 12, bold: true });
-            y += 18;
-        };
-        const paragraph = (value) => {
-            doc.font('Helvetica').fontSize(10).fillColor(COLOR.ink);
-            const height = doc.heightOfString(value, { width: WIDTH, lineGap: 2 });
-            roomFor(height);
-            doc.text(value, left, y, { width: WIDTH, lineGap: 2 });
-            y += height + 4;
-        };
-        // A table: columns { label, width, align }; the header repeats on every page it runs onto
-        const table = (columns, rows) => {
-            const header = () => {
+        const text = (value, x, y, { size = 10, font = 'Helvetica', color = COLOR.ink, width, align = 'left', spacing = 0 } = {}) =>
+            doc.font(font).fontSize(size).fillColor(color).text(value, x, y, { width, align, characterSpacing: spacing, lineBreak: false, ellipsis: width ? true : undefined, height: width ? size + 4 : undefined });
+        const rule = (y, color = COLOR.rule) => doc.moveTo(left, y).lineTo(left + WIDTH, y).lineWidth(0.75).strokeColor(color).stroke();
+        const sectionTitle = (label, y) => text(label, left, y, { size: 12, font: 'Helvetica-Bold' });
+
+        // A table: columns { label, width, align }, header on every page it runs onto
+        const table = (columns, tableRows, startY, { rowHeight = 22, zebra = false } = {}) => {
+            const header = (y) => {
                 let x = left;
                 for (const column of columns) {
-                    text(column.label, x, y, { size: 8.5, bold: true, width: column.width - 6, align: column.align });
+                    text(column.label.toUpperCase(), x + 6, y, { size: 7.5, font: 'Helvetica-Bold', color: COLOR.muted, width: column.width - 12, align: column.align, spacing: 0.4 });
                     x += column.width;
                 }
                 rule(y + 13);
-                y += 18;
+                return y + 19;
             };
-            header();
-            for (const row of rows) {
-                if (y + 16 > bottom) {
+            let y = header(startY);
+            tableRows.forEach((row, index) => {
+                const height = row.height ?? rowHeight;
+                if (y + height > bottom) {
                     doc.addPage();
-                    y = PAGE.margin;
-                    header();
+                    y = header(PAGE.margin);
                 }
-                if (row.total) rule(y - 3);
+                if (row.total) rule(y - 3, COLOR.muted);
+                else if (zebra && index % 2 === 1) doc.rect(left, y - 4, WIDTH, height).fill(COLOR.soft);
                 let x = left;
-                row.cells.forEach((cell, index) => {
-                    const { width, align } = columns[index];
-                    text(String(cell), x, y, { size: 9, bold: row.total, width: width - 6, align });
+                row.cells.forEach((cell, i) => {
+                    const { width, align } = columns[i];
+                    const { value, sub } = typeof cell === 'object' && cell !== null ? cell : { value: cell };
+                    text(String(value), x + 6, y + 2, { size: 9.5, font: row.total ? 'Helvetica-Bold' : 'Helvetica', width: width - 12, align });
+                    if (sub) text(sub, x + 6, y + 14, { size: 8, color: COLOR.muted, width: width - 12, align });
                     x += width;
                 });
-                y += 16;
-            }
+                y += height;
+            });
+            return y;
         };
 
-        // Who, which days, which jobs
-        const { showPay, totals, jobs, rows } = statement;
-        text('ShiftBuddy', left, y, { size: 9, bold: true, color: COLOR.muted });
-        y += 14;
-        text('Shift statement', left, y, { size: 18, bold: true });
-        y += 28;
-        for (const line of [personName, `Period: ${day(period.start)} to ${day(period.end)}`, `Jobs: ${scope}`, `Prepared on ${zoned(preparedAt).toFormat('LLLL d, yyyy')}`]) {
-            text(line, left, y, { size: 10 });
-            y += 14;
-        }
-        y += 4;
-        rule(y);
+        // Header: what, for whom, which days
+        text('SHIFTBUDDY', left, PAGE.margin, { size: 8.5, font: 'Helvetica-Bold', color: COLOR.accent, spacing: 1.4 });
+        text(title, left, PAGE.margin + 14, { size: 20, font: 'Helvetica-Bold' });
+        text(personName, left, PAGE.margin + 42, { size: 10 });
+        text(scope, left, PAGE.margin + 56, { size: 9, color: COLOR.muted });
 
-        // The summary, in sentences
-        heading('Summary');
+        const right = { x: left + WIDTH - 230, width: 230, align: 'right' };
+        text('PERIOD', right.x, PAGE.margin, { ...right, size: 7.5, font: 'Helvetica-Bold', color: COLOR.muted, spacing: 0.4 });
+        text(`${startDay.toFormat(acrossYears ? 'LLL d, yyyy' : 'LLL d')} – ${endDay.toFormat('LLL d, yyyy')}`, right.x, PAGE.margin + 12, { ...right, size: 11, font: 'Helvetica-Bold' });
+        text(`Prepared ${zoned(preparedAt).toFormat('LLL d, yyyy')}`, right.x, PAGE.margin + 28, { ...right, size: 9, color: COLOR.muted });
+        rule(PAGE.margin + 76);
+
+        // Three figures
+        const figures = showPay
+            ? [['Hours worked', formatHours(totals.paidMinutes)], ['Gross pay', formatMoney(totals.grossPay)], ['Take-home (estimate)', formatMoney(totals.takeHome)]]
+            : [['Hours worked', formatHours(totals.paidMinutes)], ['Shifts worked', String(totals.shiftCount)], ['Jobs', String(jobs.length)]];
+        const gap = 10;
+        const tile = (WIDTH - 2 * gap) / 3;
+        const tileY = PAGE.margin + 92;
+        figures.forEach(([label, value], index) => {
+            const x = left + index * (tile + gap);
+            doc.roundedRect(x, tileY, tile, 56, 6).fill(COLOR.soft);
+            text(label.toUpperCase(), x + 12, tileY + 12, { size: 7.5, font: 'Helvetica-Bold', color: COLOR.muted, width: tile - 24, spacing: 0.4 });
+            text(value, x + 12, tileY + 27, { size: 17, font: 'Helvetica-Bold', width: tile - 24 });
+        });
+
+        let y = tileY + 82;
         if (rows.length === 0) {
-            paragraph('No finished shifts in this period.');
+            text('No finished shifts in this period.', left, y, { size: 10, color: COLOR.muted });
         } else {
-            paragraph(`You worked ${plural(totals.shiftCount, 'shift')} at ${plural(jobs.length, 'job')}: ${formatHours(totals.paidMinutes)} hours in total, after unpaid breaks.`);
-            if (totals.grossPay != null) {
-                const after = totals.takeHome != null && statement.taxDeductionPercent > 0 ? `, about ${formatMoney(totals.takeHome)} after your ${statement.taxDeductionPercent}% deduction` : '';
-                paragraph(`Estimated pay: ${formatMoney(totals.grossPay)} before deductions${after}.`);
-            }
-            if (totals.missingRates) paragraph('Some jobs have no hourly rate, so their hours are not in the pay estimate.');
-            if (totals.scheduledCount > 0) paragraph(`${plural(totals.scheduledCount, 'shift')} had no clocked hours, so the scheduled times are used (marked "Schedule" below).`);
-        }
-
-        if (rows.length > 0) {
             // Hours (and pay) by job
-            heading('By job');
+            sectionTitle('Hours by job', y);
+            const jobCell = (job) => ({ value: job.name, sub: job.role ?? undefined });
             const jobColumns = showPay
-                ? [{ label: 'Job', width: 150 }, { label: 'Title', width: 120 }, { label: 'Shifts', width: 50, align: 'right' }, { label: 'Hours', width: 56, align: 'right' }, { label: 'Rate', width: 64, align: 'right' }, { label: 'Pay', width: 76, align: 'right' }]
-                : [{ label: 'Job', width: 200 }, { label: 'Title', width: 180 }, { label: 'Shifts', width: 60, align: 'right' }, { label: 'Hours', width: 76, align: 'right' }];
+                ? [{ label: 'Job', width: 216 }, { label: 'Shifts', width: 60, align: 'right' }, { label: 'Rate', width: 76, align: 'right' }, { label: 'Hours', width: 70, align: 'right' }, { label: 'Amount', width: 94, align: 'right' }]
+                : [{ label: 'Job', width: 276 }, { label: 'Shifts', width: 120, align: 'right' }, { label: 'Hours', width: 120, align: 'right' }];
             const jobRows = jobs.map((job) => ({
+                height: job.role ? 30 : 22,
                 cells: showPay
-                    ? [job.name, job.role ?? '-', job.shiftCount, formatHours(job.paidMinutes), job.hourlyRate == null ? 'Not set' : formatMoney(job.hourlyRate), formatMoney(job.grossPay)]
-                    : [job.name, job.role ?? '-', job.shiftCount, formatHours(job.paidMinutes)],
+                    ? [jobCell(job), job.shiftCount, job.hourlyRate == null ? '—' : formatMoney(job.hourlyRate), formatHours(job.paidMinutes), formatMoney(job.grossPay)]
+                    : [jobCell(job), job.shiftCount, formatHours(job.paidMinutes)],
             }));
             if (jobs.length > 1) {
                 jobRows.push({
                     total: true,
-                    cells: showPay ? ['Total', '', totals.shiftCount, formatHours(totals.paidMinutes), '', formatMoney(totals.grossPay)] : ['Total', '', totals.shiftCount, formatHours(totals.paidMinutes)],
+                    cells: showPay ? ['Total', totals.shiftCount, '', formatHours(totals.paidMinutes), formatMoney(totals.grossPay)] : ['Total', totals.shiftCount, formatHours(totals.paidMinutes)],
                 });
             }
-            table(jobColumns, jobRows);
+            y = table(jobColumns, jobRows, y + 22);
 
-            // Every shift, oldest first
-            heading('Shifts');
+            // Gross → the user's own deduction estimate → take-home, with what the numbers leave out beside it
+            const percent = statement.taxDeductionPercent;
+            const notes = [
+                showPay && 'Pay uses each job’s hourly rate as it is set in ShiftBuddy now.',
+                totals.missingRates && 'Jobs without an hourly rate show hours only; add a rate to include them.',
+                showPay && (percent > 0 ? 'Deductions are the one percentage you set in Settings › Pay, not a tax calculation.' : 'Set a deduction percentage in Settings › Pay for a take-home estimate.'),
+                totals.scheduledCount > 0 && `${totals.scheduledCount === 1 ? 'One shift has' : `${totals.scheduledCount} shifts have`} no clocked hours, so the scheduled times are used (“Schedule” below).`,
+            ].filter(Boolean);
+            const box = { x: left + WIDTH - 236, width: 236 };
+            if (showPay || notes.length > 0) {
+                y += 14;
+                if (y + 70 > bottom) {
+                    doc.addPage();
+                    y = PAGE.margin;
+                }
+                if (showPay) {
+                    const line = (label, value, offset, bold = false) => {
+                        text(label, box.x, y + offset, { size: 9.5, font: bold ? 'Helvetica-Bold' : 'Helvetica', width: 150 });
+                        text(value, box.x + 150, y + offset, { size: 9.5, font: bold ? 'Helvetica-Bold' : 'Helvetica', width: 86, align: 'right' });
+                    };
+                    line('Gross pay', formatMoney(totals.grossPay), 0);
+                    line(percent > 0 ? `Deductions (${percent}%, your estimate)` : 'Deductions (none set)', totals.deductions ? `– ${formatMoney(totals.deductions)}` : '—', 16);
+                    doc.moveTo(box.x, y + 33).lineTo(box.x + box.width, y + 33).lineWidth(0.75).strokeColor(COLOR.muted).stroke();
+                    line('Take-home (estimate)', formatMoney(totals.takeHome), 39, true);
+                }
+                const notesWidth = showPay ? WIDTH - box.width - 30 : WIDTH;
+                doc.font('Helvetica').fontSize(8.5).fillColor(COLOR.muted).text(notes.join('\n'), left, y, { width: notesWidth, lineGap: 3 });
+                // Below whichever is taller: the notes or the deduction box
+                y += Math.max(showPay ? 56 : 0, doc.heightOfString(notes.join('\n'), { width: notesWidth, lineGap: 3 })) + 10;
+            }
+
+            // Every shift, oldest first: job with its title under it, the times, and where the hours came from
+            y += 10;
+            if (y + 60 > bottom) {
+                doc.addPage();
+                y = PAGE.margin;
+            }
+            sectionTitle('Every shift', y);
             const timeOf = (date) => zoned(date).toFormat('h:mm a');
             const endOf = (row) => `${timeOf(row.end)}${zoned(row.end).hasSame(zoned(row.start), 'day') ? '' : ' +1'}`;
             table(
-                [{ label: 'Date', width: 96 }, { label: 'Job', width: 96 }, { label: 'Title', width: 84 }, { label: 'Start', width: 52 }, { label: 'End', width: 62 }, { label: 'Break', width: 44, align: 'right' }, { label: 'Hours', width: 36, align: 'right' }, { label: 'From', width: 46, align: 'right' }],
+                [{ label: 'Date', width: 88 }, { label: 'Job', width: 140 }, { label: 'In', width: 60, align: 'right' }, { label: 'Out', width: 76, align: 'right' }, { label: 'Break', width: 48, align: 'right' }, { label: 'Hours', width: 44, align: 'right' }, { label: 'From', width: 60, align: 'right' }],
                 rows.map((row) => ({
-                    cells: [zoned(row.start).toFormat('ccc, LLL d, yyyy'), row.jobName, row.role ?? '-', timeOf(row.start), endOf(row), row.breakMinutes ? `${row.breakMinutes} min` : '-', formatHours(row.paidMinutes), row.source === 'clocked' ? 'Clocked' : 'Schedule'],
+                    height: row.role ? 30 : 22,
+                    cells: [
+                        zoned(row.start).toFormat(acrossYears ? 'LLL d, yyyy' : 'ccc, LLL d'),
+                        { value: row.jobName, sub: row.role ?? undefined },
+                        timeOf(row.start),
+                        endOf(row),
+                        row.breakMinutes ? `${row.breakMinutes} min` : '—',
+                        formatHours(row.paidMinutes),
+                        row.source === 'clocked' ? 'Clock' : 'Schedule',
+                    ],
                 })),
+                y + 22,
+                { zebra: true },
             );
         }
 
@@ -151,11 +192,11 @@ const renderStatementPdf = ({ statement, personName, scope, period, timeZone, pr
         const { start, count } = doc.bufferedPageRange();
         for (let index = start; index < start + count; index++) {
             doc.switchToPage(index);
-            const footerY = PAGE.height - PAGE.margin - 20;
+            const footerY = PAGE.height - PAGE.margin - 22;
             doc.page.margins.bottom = 0; // writing inside the bottom margin must not start a new page
             rule(footerY - 8);
             doc.font('Helvetica').fontSize(7.5).fillColor(COLOR.muted).text(
-                'Made from the shifts and hours in ShiftBuddy. Not an official pay stub: your employer’s may also show stat holiday pay, vacation pay, CPP, EI and income tax.',
+                'An estimate from the shifts and hours in ShiftBuddy — not an official pay stub. Your employer’s stub may also show stat holiday pay, vacation pay, CPP, EI and income tax.',
                 left,
                 footerY,
                 { width: WIDTH - 90, lineGap: 2 },
