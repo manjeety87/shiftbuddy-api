@@ -155,7 +155,10 @@ model Shift {
 
   // Nearly every shift query is "this user's shifts in a time range"
   @@index([userId, startTime])
-  @@index([jobId])
+  // ...and the rest ask by end: clashes and leave-by (ends after now / just before a shift), "Add your hours?" (ended this week)
+  @@index([userId, endTime])
+  // A job's shifts, e.g. its upcoming ones removed when the job is deleted
+  @@index([jobId, startTime])
   @@map("shifts")
 }
 
