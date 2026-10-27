@@ -31,19 +31,46 @@ const proposalSchema = z.discriminatedUnion('type', [
     }),
 ]);
 
-// POST /assistant/messages — one thing the person said or typed, with the conversation so far
-const assistantMessageSchema = z.object({
-    message: z.string().trim().min(1, 'Say or type something first').max(MAX_ASSISTANT_MESSAGE, 'That’s a bit long — try a shorter request'),
-    history: z
-        .array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().max(MAX_HISTORY_TEXT) }))
-        .max(MAX_ASSISTANT_HISTORY)
-        .default([]),
+const historySchema = z
+    .array(z.object({ role: z.enum(['user', 'assistant']), text: z.string().max(MAX_HISTORY_TEXT) }))
+    .max(MAX_ASSISTANT_HISTORY)
+    .default([]);
+
+// The conversation around one turn, the same whether it was typed or spoken
+const turnFields = {
+    history: historySchema,
     pending: proposalSchema.nullable().default(null),
     page: z.enum(ASSISTANT_PAGES).optional().describe('The page the person is on'),
     timeZone: timeZone(),
+};
+
+// POST /assistant/messages — one thing the person said or typed, with the conversation so far
+const assistantMessageSchema = z.object({
+    message: z.string().trim().min(1, 'Say or type something first').max(MAX_ASSISTANT_MESSAGE, 'That’s a bit long — try a shorter request'),
+    ...turnFields,
+});
+
+// A multipart form carries everything as text: history and pending arrive as JSON strings
+const jsonField = (schema) =>
+    z.preprocess((value, ctx) => {
+        if (typeof value !== 'string') return value;
+        try {
+            return JSON.parse(value);
+        } catch {
+            ctx.addIssue({ code: 'custom', message: 'history and pending are sent as JSON text' });
+            return z.NEVER;
+        }
+    }, schema);
+
+// POST /assistant/voice — the same turn, as a recording (the phone app can't turn speech into text itself)
+const assistantVoiceSchema = z.object({
+    history: jsonField(turnFields.history),
+    pending: jsonField(turnFields.pending),
+    page: turnFields.page,
+    timeZone: turnFields.timeZone,
 });
 
 // POST /assistant/confirm — the card's Save button
 const confirmProposalSchema = z.object({ proposal: proposalSchema });
 
-module.exports = { proposalSchema, assistantMessageSchema, confirmProposalSchema };
+module.exports = { proposalSchema, assistantMessageSchema, assistantVoiceSchema, confirmProposalSchema };

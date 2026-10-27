@@ -86,3 +86,14 @@ test('message: history and the card are checked; a pending card keeps only what 
     assert.equal(parsed.pending.allowOverlap, false);
     assert.equal(assistantMessageSchema.safeParse({ ...base, pending: { type: 'deleteEverything' } }).success, false);
 });
+
+test('voice form: history and the card arrive as JSON text and are checked like a typed turn', () => {
+    const { assistantVoiceSchema } = require('../src/validation/assistant.validation');
+    const pending = { type: 'markMissed', shiftId: boathouse.id, reason: 'SICK' };
+    const parsed = assistantVoiceSchema.parse({ timeZone: ZONE, history: JSON.stringify([{ role: 'user', text: 'hi' }]), pending: JSON.stringify(pending) });
+    assert.deepEqual(parsed.history, [{ role: 'user', text: 'hi' }]);
+    assert.equal(parsed.pending.reason, 'SICK');
+    assert.deepEqual(assistantVoiceSchema.parse({ timeZone: ZONE }), { timeZone: ZONE, history: [], pending: null });
+    assert.equal(assistantVoiceSchema.safeParse({ timeZone: ZONE, history: '[not json' }).success, false);
+    assert.equal(assistantVoiceSchema.safeParse({ timeZone: ZONE, pending: JSON.stringify({ type: 'deleteEverything' }) }).success, false);
+});

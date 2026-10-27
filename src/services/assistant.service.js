@@ -5,7 +5,7 @@ const { generateWithFallback } = require('../utils/gemini');
 const shiftService = require('./shift.service');
 const timesheetService = require('./timesheet.service');
 const { NOT_MISSED } = require('../constants/shifts');
-const { MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
+const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
 const { quickAnswer, quickReplyText, spanOn, describeShift, describeProposal, buildSystemPrompt, assistantTools } = require('../domain/assistant');
 const { jobName } = require('../domain/jobLabels');
 const { overlaps } = require('../domain/shifts');
@@ -297,4 +297,48 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
     return { reply: 'Sorry, I got lost there — could you say that again more simply?', pending: await keepPending(), actions: [], saved: null };
 };
 
-module.exports = { respond, confirmProposal };
+// Gemini reads audio as these; a phone's .m4a is AAC in an MPEG-4 box
+const GEMINI_AUDIO_TYPE = { 'audio/m4a': 'audio/mp4', 'audio/x-m4a': 'audio/mp4', 'audio/x-wav': 'audio/wav', 'audio/mpeg': 'audio/mp3' };
+
+const TRANSCRIBE_PROMPT = `Write down exactly what the speaker says in this recording. They talk about their work shifts and may mix Hindi and English (Hinglish).
+- English words in English.
+- Hindi words in Roman letters, the way people text ("kal meri shift hai", "nahi ja paunga"), never Devanagari.
+- Numbers and times as digits ("9 se 5", "5:30").
+- No translation, no answer, no notes. If nothing clear is said, return an empty text.`;
+
+/** The words in a recording, Hinglish in Roman letters. Nothing is kept: the audio exists only for this call. */
+const transcribe = async (audio, mimeType) => {
+    let response;
+    try {
+        response = await generateWithFallback(
+            {
+                contents: [{ role: 'user', parts: [{ text: TRANSCRIBE_PROMPT }, { inlineData: { data: audio.toString('base64'), mimeType: GEMINI_AUDIO_TYPE[mimeType] ?? mimeType } }] }],
+                config: { responseMimeType: 'application/json', responseSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, temperature: 0, thinkingConfig: { thinkingLevel: 'low' } },
+            },
+            { ...GEMINI_MESSAGES, label: 'Assistant voice' }
+        );
+    } catch (err) {
+        // A recording Gemini can't read (a tap with no sound, a broken file) is "didn't catch that", not a failure;
+        // busy and out-of-quota (503) still say so
+        if (err instanceof ApiError && err.statusCode === 502) return '';
+        throw err;
+    }
+    try {
+        return String(JSON.parse(response.text).text ?? '').trim();
+    } catch {
+        return '';
+    }
+};
+
+/**
+ * A spoken turn from the phone app, which can't turn speech into text itself (Expo Go
+ * has no speech recognition). `heard` is what was understood; when it's empty nothing
+ * else is sent and the app keeps its card and asks again.
+ */
+const respondToVoice = async (userId, { audio, mimeType, ...turn }) => {
+    const heard = (await transcribe(audio, mimeType)).slice(0, MAX_ASSISTANT_MESSAGE);
+    if (!heard) return { heard: '' };
+    return { heard, ...(await respond(userId, { ...turn, message: heard })) };
+};
+
+module.exports = { respond, respondToVoice, confirmProposal };

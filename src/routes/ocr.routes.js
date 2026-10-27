@@ -4,7 +4,7 @@ const requireAuth = require('../middleware/auth.middleware');
 const validate = require('../middleware/validate.middleware');
 const checkOcrUsageLimit = require('../middleware/checkOcrUsageLimit');
 const { ocrLimiter } = require('../middleware/rateLimiter');
-const upload = require('../config/multer');
+const { imageUpload } = require('../config/multer');
 const { extractShiftsSchema } = require('../validation/ocr.validation');
 
 const router = express.Router();
@@ -14,7 +14,7 @@ router.post(
     requireAuth,
     ocrLimiter,
     checkOcrUsageLimit,
-    upload.single('image'),
+    imageUpload.single('image'),
     validate(extractShiftsSchema), // after multer: it's what fills req.body from the form fields
     ocrController.extractShifts
 );

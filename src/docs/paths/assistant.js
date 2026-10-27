@@ -25,6 +25,35 @@ const card = {
     properties: { type: { type: 'string', enum: ['addShifts', 'markMissed', 'logHours'] }, preview: { type: 'object', additionalProperties: true } },
 };
 
+const turnReply = {
+    type: 'object',
+    properties: {
+        reply: { type: 'string', description: 'What to say (and show), in the person’s language' },
+        pending: card,
+        actions: {
+            type: 'array',
+            description: 'What to open in the app, in order',
+            items: {
+                type: 'object',
+                properties: {
+                    type: { type: 'string', enum: ['openPage', 'openShift', 'openPanel', 'closePanels'] },
+                    page: { type: 'string' },
+                    shiftId: { type: 'string', format: 'uuid' },
+                    panel: { type: 'string' },
+                },
+            },
+        },
+        saved: { ...saved, nullable: true },
+    },
+};
+
+const turnErrors = {
+    ...errors.validation,
+    ...errors.rateLimited,
+    ...error(502, 'The assistant couldn’t answer — try again'),
+    ...error(503, 'Every Gemini model is busy, or out of free requests — try again later'),
+};
+
 module.exports = {
     '/assistant/messages': {
         post: op({
@@ -36,32 +65,32 @@ module.exports = {
                 'card — nothing is saved until a yes), look up other shifts, and open places in the app. A plain “yes” / “haan” / “no” to the waiting card ' +
                 'is answered without the model. The client keeps the conversation (`history`) and the card (`pending`) and sends them back each turn. ' +
                 'Replies follow the person’s language: English, Hinglish in Roman letters, or Hindi. 20 turns/min per user.',
+            responses: { ...ok('The reply', turnReply), ...turnErrors },
+        }),
+    },
+    '/assistant/voice': {
+        post: op({
+            tag,
+            summary: 'Say something to the assistant, as a recording',
+            description:
+                'For the phone app, which can’t turn speech into text itself. Gemini writes down what was said (Hinglish in Roman letters), then the ' +
+                'turn runs exactly like /assistant/messages and the answer adds `heard`. When nothing clear was said the answer is only `{ heard: "" }`: ' +
+                'keep the card and ask again. The recording is not stored. Shares the 20 turns/min.',
+            multipart: {
+                type: 'object',
+                required: ['audio', 'timeZone'],
+                properties: {
+                    audio: { type: 'string', format: 'binary', description: 'M4A/AAC (what phones record), MP3, WAV, WEBM or OGG, up to 3 MB' },
+                    history: { type: 'string', description: 'The earlier turns, as JSON (the same shape as /assistant/messages)' },
+                    pending: { type: 'string', description: 'The waiting card, as JSON; leave out when there is none' },
+                    page: { type: 'string', description: 'The page the person is on' },
+                    timeZone: { type: 'string', example: 'America/Toronto' },
+                },
+            },
             responses: {
-                ...ok('The reply', {
-                    type: 'object',
-                    properties: {
-                        reply: { type: 'string', description: 'What to say (and show), in the person’s language' },
-                        pending: card,
-                        actions: {
-                            type: 'array',
-                            description: 'What to open in the app, in order',
-                            items: {
-                                type: 'object',
-                                properties: {
-                                    type: { type: 'string', enum: ['openPage', 'openShift', 'openPanel', 'closePanels'] },
-                                    page: { type: 'string' },
-                                    shiftId: { type: 'string', format: 'uuid' },
-                                    panel: { type: 'string' },
-                                },
-                            },
-                        },
-                        saved: { ...saved, nullable: true },
-                    },
-                }),
-                ...errors.validation,
-                ...errors.rateLimited,
-                ...error(502, 'The assistant couldn’t answer — try again'),
-                ...error(503, 'Every Gemini model is busy — try again in a moment'),
+                ...ok('What was heard, and the reply', { ...turnReply, properties: { heard: { type: 'string', description: 'What was understood; empty when nothing was' }, ...turnReply.properties } }),
+                ...error(400, 'No recording, or not an audio type'),
+                ...turnErrors,
             },
         }),
     },
