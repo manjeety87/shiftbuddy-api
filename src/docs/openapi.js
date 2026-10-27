@@ -22,7 +22,7 @@ const spec = {
     security: [{ bearerAuth: [] }],
     tags: [
         { name: 'Auth & profile', description: 'Accounts, sessions, profile and commute settings' },
-        { name: 'Account', description: 'Signed-in devices, a copy of your data, deleting the account' },
+        { name: 'Account', description: 'Signed-in devices and deleting the account' },
         { name: 'Jobs', description: 'Workplaces and the role at each' },
         { name: 'Shifts', description: 'Shifts, copying, pay summary, schedule message, conflicts' },
         { name: 'Timesheet', description: 'Clocking in and out, and hours worked per pay period' },
