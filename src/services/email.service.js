@@ -4,7 +4,15 @@ const env = require('../config/env');
 
 const resend = new Resend(env.RESEND_API_KEY);
 
+// Reserved names (RFC 2606/6761) can never receive mail. Test accounts use them (@test.local),
+// and each attempt would still count against the Resend quota — so they are only logged.
+const RESERVED_DOMAIN = /\.(test|local|example|invalid|localhost)$/i;
+
 const send = async ({ to, subject, html }) => {
+  if (RESERVED_DOMAIN.test(to.split('@')[1] ?? '')) {
+    console.info(`Email to ${to} not sent (reserved test domain): ${subject}`);
+    return null;
+  }
   const result = await resend.emails.send({
     from: 'ShiftBuddy <noreply@manjeetyadav.me>', // domain verify hone ke baad ye badlenge
     to,
