@@ -20,14 +20,17 @@ const isBusy = (err) => BUSY_STATUS.has(err.status) || /UNAVAILABLE|RESOURCE_EXH
 
 /**
  * One Gemini call, trying each model in order: a busy or retired model moves on to
- * the next one instead of waiting. `label` names the caller in the logs; the two
- * messages are what the user sees when every model is busy, or one fails outright.
+ * the next one instead of waiting. `label` names the caller in the logs; the
+ * messages are what the user sees when every model is busy (or, `quotaMessage`, out
+ * of quota for the day), or one fails outright.
  * `secondPass: false` skips the pause-and-retry and `timeoutMs` gives up on a slow
  * model early (a voice reply can't wait that long).
  */
-const generateWithFallback = async (request, { label, busyMessage, failMessage, secondPass = true, timeoutMs }) => {
+const generateWithFallback = async (request, { label, busyMessage, failMessage, quotaMessage = busyMessage, secondPass = true, timeoutMs }) => {
     const passes = secondPass ? [GEMINI_MODELS, GEMINI_MODELS.slice(0, SECOND_PASS_MODELS)] : [GEMINI_MODELS];
     let sawBusy = false;
+    // Every model out of quota is a different message from "busy for a moment": waiting a minute won't help
+    let onlyQuota = true;
 
     for (let pass = 0; pass < passes.length; pass++) {
         if (pass > 0) {
@@ -44,6 +47,7 @@ const generateWithFallback = async (request, { label, busyMessage, failMessage, 
             } catch (err) {
                 if (isBusy(err)) {
                     sawBusy = true;
+                    if (!/quota/i.test(err.message || '')) onlyQuota = false;
                     console.warn(`${label} model ${model} busy (${err.status ?? 'n/a'}), trying the next one`);
                     continue;
                 }
@@ -56,7 +60,7 @@ const generateWithFallback = async (request, { label, busyMessage, failMessage, 
             }
         }
     }
-    throw new ApiError(503, busyMessage);
+    throw new ApiError(503, sawBusy && onlyQuota ? quotaMessage : busyMessage);
 };
 
 module.exports = { generateWithFallback };

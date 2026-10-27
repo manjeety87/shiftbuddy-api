@@ -23,7 +23,8 @@ const GEMINI_MESSAGES = {
     // A spoken reply can't wait for a second pass, or on a model that hangs: the next one
     // answers in a second or two. The person can always just ask again.
     secondPass: false,
-    timeoutMs: 6000,
+    timeoutMs: 9000,
+    quotaMessage: 'The assistant has used up its free requests for now — try again later, or use the app’s own buttons',
 };
 
 const roleOf = (job) => (job.companyName?.trim() ? job.title : null);
