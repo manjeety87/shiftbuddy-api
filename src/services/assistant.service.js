@@ -297,8 +297,8 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
     return { reply: 'Sorry, I got lost there — could you say that again more simply?', pending: await keepPending(), actions: [], saved: null };
 };
 
-// Gemini reads audio as these; a phone's .m4a is AAC in an MPEG-4 box
-const GEMINI_AUDIO_TYPE = { 'audio/m4a': 'audio/mp4', 'audio/x-m4a': 'audio/mp4', 'audio/x-wav': 'audio/wav', 'audio/mpeg': 'audio/mp3' };
+// The names Gemini reads. A phone's .m4a must go as audio/m4a: sent as audio/mp4 it hung for 30 s (tried 2026-10-27).
+const GEMINI_AUDIO_TYPE = { 'audio/mp4': 'audio/m4a', 'audio/x-m4a': 'audio/m4a', 'audio/x-wav': 'audio/wav', 'audio/mpeg': 'audio/mp3' };
 
 const TRANSCRIBE_PROMPT = `Write down exactly what the speaker says in this recording. They talk about their work shifts and may mix Hindi and English (Hinglish).
 - English words in English.
