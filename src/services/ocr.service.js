@@ -1,25 +1,9 @@
 const sharp = require('sharp');
-const { GoogleGenAI } = require('@google/genai');
 const { DateTime } = require('luxon');
 const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
-const env = require('../config/env');
+const { generateWithFallback } = require('../utils/gemini');
 const { normalizeScannedShifts, suggestJobId } = require('../domain/scannedShifts');
-
-const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
-
-// Free-tier Gemini models get "high demand" 503s that come and go per model, so
-// instead of waiting on one busy model we fall through to the next. Override
-// the order with GEMINI_MODELS (comma-separated); GEMINI_MODEL still works for one.
-const DEFAULT_MODELS = ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
-const configuredModels = env.GEMINI_MODELS.length > 0 ? env.GEMINI_MODELS : [env.GEMINI_MODEL].filter(Boolean);
-const GEMINI_MODELS = configuredModels.length > 0 ? configuredModels : DEFAULT_MODELS;
-const BUSY_STATUS = new Set([429, 500, 503]);
-const GONE_STATUS = new Set([404]); // model retired for this key — just skip it
-const SECOND_PASS_DELAY_MS = 3000;
-const SECOND_PASS_MODELS = 2; // after a short pause, retry the best two once more
-
-const isBusy = (err) => BUSY_STATUS.has(err.status) || /UNAVAILABLE|RESOURCE_EXHAUSTED|high demand|overloaded/i.test(err.message || '');
 
 const shiftExtractionSchema = {
     type: 'object',
@@ -67,39 +51,6 @@ For each shift, extract:
 If the image contains no readable schedule, or no shifts for "${employeeName}", return an empty shifts array.`;
 };
 
-/** Try each model in order; a busy or retired model moves on to the next one instead of waiting. */
-const generateWithFallback = async (request) => {
-    const passes = [GEMINI_MODELS, GEMINI_MODELS.slice(0, SECOND_PASS_MODELS)];
-    let sawBusy = false;
-
-    for (let pass = 0; pass < passes.length; pass++) {
-        if (pass > 0) {
-            if (!sawBusy) break; // nothing was merely busy — another pass won't help
-            await new Promise((resolve) => setTimeout(resolve, SECOND_PASS_DELAY_MS));
-        }
-        for (const model of passes[pass]) {
-            try {
-                const response = await ai.models.generateContent({ ...request, model });
-                if (model !== GEMINI_MODELS[0] || pass > 0) console.info(`OCR served by ${model}`);
-                return response;
-            } catch (err) {
-                if (isBusy(err)) {
-                    sawBusy = true;
-                    console.warn(`OCR model ${model} busy (${err.status ?? 'n/a'}), trying the next one`);
-                    continue;
-                }
-                if (GONE_STATUS.has(err.status)) {
-                    console.warn(`OCR model ${model} not available for this key, skipping`);
-                    continue;
-                }
-                console.error(`OCR model ${model} failed:`, err.message);
-                throw new ApiError(502, 'Could not process the image right now — please try again');
-            }
-        }
-    }
-    throw new ApiError(503, 'The schedule reader is busy right now — please try again in a minute');
-};
-
 /**
  * The shifts for `employeeName` in a photo or screenshot of a schedule, as UTC
  * times worked out in the user's `timeZone`, each with a suggested job when the
@@ -131,7 +82,11 @@ const extractShiftsFromImage = async (userId, imageBuffer, { employeeName, timeZ
     };
 
     const [response, jobs] = await Promise.all([
-        generateWithFallback(request),
+        generateWithFallback(request, {
+            label: 'OCR',
+            busyMessage: 'The schedule reader is busy right now — please try again in a minute',
+            failMessage: 'Could not process the image right now — please try again',
+        }),
         prisma.job.findMany({ where: { userId, isActive: true }, select: { id: true, companyName: true, title: true, matchKeywords: true } }),
     ]);
 
