@@ -149,4 +149,4 @@ const summarizeShifts = (shifts, { taxPercent, now = Date.now() }) => {
     };
 };
 
-module.exports = { findOverlapPairs, splitByOverlap, planShiftCopies, summarizeShifts, isMissed, countMissed };
+module.exports = { overlaps, findOverlapPairs, splitByOverlap, planShiftCopies, summarizeShifts, isMissed, countMissed };

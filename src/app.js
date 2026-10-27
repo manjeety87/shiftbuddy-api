@@ -13,6 +13,7 @@ const geocodeRoutes = require('./routes/geocode.routes');
 const transitRoutes = require('./routes/transit.routes');
 const shareRoutes = require('./routes/share.routes');
 const timesheetRoutes = require('./routes/timesheet.routes');
+const assistantRoutes = require('./routes/assistant.routes');
 const notFound = require('./middleware/notFound');
 const errorHandler = require('./utils/errorHandler');
 
@@ -63,6 +64,7 @@ app.use('/api/geocode', geocodeRoutes);
 app.use('/api/transit', transitRoutes);
 app.use('/api/shares', shareRoutes);
 app.use('/api/timesheet', timesheetRoutes);
+app.use('/api/assistant', assistantRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

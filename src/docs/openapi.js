@@ -30,6 +30,7 @@ const spec = {
         { name: 'Scanning', description: 'Reading shifts from photos and screenshots' },
         { name: 'Places', description: 'Address search and map pins' },
         { name: 'Sharing', description: 'Letting someone see your schedule' },
+        { name: 'Assistant', description: 'Talking to the app: add shifts, mark missed, add hours and open places, confirmed on a card' },
     ],
     paths: {
         ...require('./paths/auth'),
@@ -38,6 +39,7 @@ const spec = {
         ...require('./paths/shifts'),
         ...require('./paths/timesheet'),
         ...require('./paths/other'),
+        ...require('./paths/assistant'),
     },
     components: {
         securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } },

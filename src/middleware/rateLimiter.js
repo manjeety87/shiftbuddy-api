@@ -48,7 +48,12 @@ const ocrLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 30, message: '
 // Each PDF statement is drawn on the server; trying a few stretches stays well inside this
 const statementLimiter = createLimiter({ windowMs: 60 * MINUTE_MS, max: 60, message: 'Too many PDFs at once. Please try again in a little while.' });
 
+// Each assistant turn is up to a few Gemini calls. A real conversation is a few
+// turns a minute; this stops a stuck microphone or a script from spending the quota.
+const assistantLimiter = createLimiter({ windowMs: MINUTE_MS, max: 20, message: 'That’s a lot of requests — give the assistant a moment.' });
+
 module.exports = {
+    assistantLimiter,
     authLimiter,
     emailCodeLimiter,
     refreshLimiter,
