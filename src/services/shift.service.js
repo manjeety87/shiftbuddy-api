@@ -186,6 +186,13 @@ const deleteShift = async (userId, shiftId) => {
     if (count === 0) throw new ApiError(404, 'Shift not found');
 };
 
+/** Several at once, all or none (the assistant's "remove these"). 404 when any isn't theirs. */
+const deleteShifts = (userId, shiftIds) =>
+    prisma.$transaction(async (tx) => {
+        const { count } = await tx.shift.deleteMany({ where: { id: { in: shiftIds }, userId } });
+        if (count !== shiftIds.length) throw new ApiError(404, 'Shift not found');
+    });
+
 const getShiftsSummary = async (userId, filters = {}) => {
     const [shifts, user] = await Promise.all([
         prisma.shift.findMany({ where: shiftWhere(userId, filters), include: { job: true } }),
@@ -203,6 +210,7 @@ module.exports = {
     getShiftsSummary,
     updateShift,
     deleteShift,
+    deleteShifts,
     markMissed,
     clearMissed,
     createShiftsBulk,

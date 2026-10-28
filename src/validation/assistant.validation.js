@@ -17,6 +17,21 @@ const proposalSchema = z.discriminatedUnion('type', [
         // A single shift whose clash the card showed, and the person said yes anyway
         allowOverlap: z.boolean().default(false),
     }),
+    // The schedule changed: new times, another day, or another job — the whole shift as it will be
+    z.object({
+        type: z.literal('editShift'),
+        shiftId: uuid('Invalid shift ID'),
+        jobId: uuid('Invalid job ID'),
+        startTime: z.coerce.date(),
+        endTime: z.coerce.date(),
+        // The new time clashes, the card showed it, and the person said yes anyway
+        allowOverlap: z.boolean().default(false),
+    }),
+    // No longer on the schedule (rescheduled away, taken off, added by mistake) — not the same as missed
+    z.object({
+        type: z.literal('removeShifts'),
+        shiftIds: z.array(uuid('Invalid shift ID')).min(1).max(MAX_PROPOSED_SHIFTS),
+    }),
     z.object({
         type: z.literal('markMissed'),
         shiftId: uuid('Invalid shift ID'),

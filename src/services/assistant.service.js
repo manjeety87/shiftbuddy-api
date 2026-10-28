@@ -11,7 +11,7 @@ const { jobName } = require('../domain/jobLabels');
 const { overlaps } = require('../domain/shifts');
 const { resolveFeatures } = require('../domain/features');
 const { autoBreakMinutes } = require('../domain/timesheet');
-const { createShiftSchema } = require('../validation/shift.validation');
+const { createShiftSchema, updateShiftSchema } = require('../validation/shift.validation');
 
 const jobFields = { id: true, title: true, companyName: true, color: true };
 const shiftFields = { id: true, startTime: true, endTime: true, missedReason: true, job: { select: jobFields }, timeEntries: { select: { clockIn: true, clockOut: true, breakMinutes: true } } };
@@ -60,8 +60,10 @@ const ownShift = async (userId, context, shiftId) => {
  * The card for a proposal: the proposal itself (what gets saved) plus `preview`
  * (what the card shows). Throws a plain Error the model can read when the
  * proposal can't be made — wrong id, a shift that already has hours, and so on.
+ * `checkClash`: a fresh card from the model that lands on a shift they already have
+ * is sent back once — "Thursday is now 2 to 10" means change that shift, not add one.
  */
-const cardFor = async (userId, context, proposal) => {
+const cardFor = async (userId, context, proposal, { checkClash = false } = {}) => {
     if (proposal.type === 'addShifts') {
         const jobOf = (id) => context.jobs.find((job) => job.id === id);
         const missing = proposal.shifts.find((shift) => !jobOf(shift.jobId));
@@ -71,9 +73,16 @@ const cardFor = async (userId, context, proposal) => {
         const spanEnd = new Date(Math.max(...proposal.shifts.map((shift) => shift.endTime.getTime())));
         const existing = await prisma.shift.findMany({
             where: { userId, ...NOT_MISSED, startTime: { lt: spanEnd }, endTime: { gt: spanStart } },
-            select: { startTime: true, endTime: true, job: { select: jobFields } },
+            select: { id: true, startTime: true, endTime: true, job: { select: jobFields } },
         });
         const clashes = existing.filter((shift) => proposal.shifts.some((candidate) => overlaps(candidate, shift)));
+        if (checkClash && clashes.length > 0) {
+            // By id: the model reads its times from SCHEDULE, in their zone
+            const listed = clashes.map((shift) => `${jobName(shift.job)} (${shift.id})`).join('; ');
+            throw new Error(
+                `They already have a shift at that time: ${listed}. If that shift's time or day changed, use propose_edit_shift on it. If it's off their schedule and this replaces it, remove it. Only if they said this is an extra shift, call propose_add_shifts again with extraShift true.`
+            );
+        }
         return {
             ...proposal,
             // One shift: the card shows the clash, and a yes means "save anyway". Several: clashing ones are skipped.
@@ -85,9 +94,38 @@ const cardFor = async (userId, context, proposal) => {
         };
     }
 
+    if (proposal.type === 'removeShifts') {
+        const shifts = [];
+        for (const shiftId of new Set(proposal.shiftIds)) {
+            const shift = await ownShift(userId, context, shiftId);
+            if (!shift) throw new Error(`Unknown shiftId ${shiftId} — use an id from SCHEDULE or find_shifts`);
+            // They worked it, so it happened: the hours and the shift stay together
+            if (shift.timeEntries.length > 0) throw new Error(`The shift ${shiftId} has hours added, so it was worked and can’t be removed here — offer to open it (open_shift)`);
+            shifts.push(shift);
+        }
+        return { type: 'removeShifts', shiftIds: shifts.map((shift) => shift.id), preview: { shifts: shifts.map((shift) => ({ ...jobCard(shift.job), startTime: shift.startTime, endTime: shift.endTime, missed: Boolean(shift.missedReason) })) } };
+    }
+
     const shift = await ownShift(userId, context, proposal.shiftId);
     if (!shift) throw new Error(`Unknown shiftId ${proposal.shiftId} — use an id from SCHEDULE or find_shifts`);
     const shiftPreview = { ...jobCard(shift.job), startTime: shift.startTime, endTime: shift.endTime };
+
+    if (proposal.type === 'editShift') {
+        const job = context.jobs.find((item) => item.id === proposal.jobId);
+        if (!job) throw new Error(`Unknown jobId ${proposal.jobId} — use an id from JOBS`);
+        const unchanged = job.id === shift.job.id && proposal.startTime.getTime() === shift.startTime.getTime() && proposal.endTime.getTime() === shift.endTime.getTime();
+        if (unchanged) throw new Error('That is already the shift’s time — ask what changed');
+        const clashes = await prisma.shift.findMany({
+            where: { userId, ...NOT_MISSED, id: { not: shift.id }, startTime: { lt: proposal.endTime }, endTime: { gt: proposal.startTime } },
+            select: { startTime: true, endTime: true, job: { select: jobFields } },
+        });
+        return {
+            ...proposal,
+            // The card shows the clash; a yes means "change it anyway"
+            allowOverlap: clashes.length > 0,
+            preview: { before: shiftPreview, after: { ...jobCard(job), startTime: proposal.startTime, endTime: proposal.endTime }, overlaps: clashes.map((item) => ({ ...jobCard(item.job), startTime: item.startTime, endTime: item.endTime })) },
+        };
+    }
 
     if (proposal.type === 'markMissed') {
         if (shift.missedReason) throw new Error('That shift is already marked missed');
@@ -104,7 +142,7 @@ const cardFor = async (userId, context, proposal) => {
 };
 
 /** A tool call's arguments → a proposal, in UTC on the person's calendar. */
-const proposalFromCall = (call, context, timeZone) => {
+const proposalFromCall = async (userId, call, context, timeZone) => {
     const { args } = call;
     if (call.name === 'propose_add_shifts') {
         const shifts = (args.shifts ?? []).map((shift) => {
@@ -116,12 +154,27 @@ const proposalFromCall = (call, context, timeZone) => {
         return { type: 'addShifts', shifts };
     }
     if (call.name === 'propose_mark_missed') return { type: 'markMissed', shiftId: args.shiftId, reason: args.reason };
+    if (call.name === 'propose_remove_shifts') {
+        if (!args.shiftIds?.length) throw new Error('No shifts given');
+        return { type: 'removeShifts', shiftIds: args.shiftIds };
+    }
+
+    const shift = await ownShift(userId, context, args.shiftId);
+    if (!shift) throw new Error(`Unknown shiftId ${args.shiftId} — use an id from SCHEDULE or find_shifts`);
+    const own = (date) => DateTime.fromJSDate(date, { zone: timeZone });
+
+    if (call.name === 'propose_edit_shift') {
+        // Only what changed is given; the rest is the shift as it is
+        const day = args.date ?? own(shift.startTime).toISODate();
+        const start = args.start ?? own(shift.startTime).toFormat('HH:mm');
+        const end = args.end ?? own(shift.endTime).toFormat('HH:mm');
+        const span = spanOn(day, start, end, timeZone);
+        if (!span) throw new Error(`Couldn’t read ${day} ${start}–${end}; use YYYY-MM-DD and HH:mm`);
+        return { type: 'editShift', shiftId: shift.id, jobId: args.jobId ?? shift.job.id, ...span };
+    }
 
     // Hours are on the shift's own day, so "9 to 5:30" needs no date from the model
-    const shift = context.shiftsById.get(args.shiftId);
-    const day = shift ? DateTime.fromJSDate(shift.startTime, { zone: timeZone }).toISODate() : null;
-    const span = day && spanOn(day, args.start, args.end, timeZone);
-    if (!shift) throw new Error(`Unknown shiftId ${args.shiftId} — use an id from SCHEDULE or find_shifts`);
+    const span = spanOn(own(shift.startTime).toISODate(), args.start, args.end, timeZone);
     if (!span) throw new Error(`Couldn’t read ${args.start}–${args.end}; use HH:mm`);
     return { type: 'logHours', shiftId: args.shiftId, clockIn: span.startTime, clockOut: span.endTime, ...(args.breakMinutes != null && { breakMinutes: args.breakMinutes }) };
 };
@@ -145,7 +198,8 @@ const findShifts = async (userId, context, { from, to, jobId }, timeZone, now) =
 
 /**
  * Saves a confirmed proposal through the same services and rules as the app's
- * own forms. Returns what changed, so the app can refresh and say it.
+ * own forms. Returns what changed, so the app can refresh and say it. A change or a
+ * removal also returns `undo`: the proposal that puts it back, sent to /assistant/confirm.
  */
 const applyProposal = async (userId, proposal) => {
     if (proposal.type === 'addShifts') {
@@ -160,6 +214,28 @@ const applyProposal = async (userId, proposal) => {
         }
         const { created, skipped } = await shiftService.createShiftsBulk(userId, shifts);
         return { type: 'addShifts', count: created.length, shiftIds: created.map((shift) => shift.id), skipped: skipped.length };
+    }
+    if (proposal.type === 'editShift') {
+        const before = await prisma.shift.findFirst({ where: { id: proposal.shiftId, userId }, select: { jobId: true, startTime: true, endTime: true } });
+        if (!before) throw new ApiError(404, 'Shift not found');
+        const checked = updateShiftSchema.safeParse({ jobId: proposal.jobId, startTime: proposal.startTime, endTime: proposal.endTime });
+        if (!checked.success) throw new ApiError(400, checked.error.issues[0].message);
+        await shiftService.updateShift(userId, proposal.shiftId, { ...checked.data, allowOverlap: proposal.allowOverlap });
+        // Undo puts back exactly what was there, even if something now sits in its old place
+        return { type: 'editShift', count: 1, shiftIds: [proposal.shiftId], skipped: 0, undo: { type: 'editShift', shiftId: proposal.shiftId, ...before, allowOverlap: true } };
+    }
+    if (proposal.type === 'removeShifts') {
+        const shifts = await prisma.shift.findMany({ where: { id: { in: proposal.shiftIds }, userId }, select: { jobId: true, startTime: true, endTime: true, notes: true, _count: { select: { timeEntries: true } } } });
+        if (shifts.length !== proposal.shiftIds.length) throw new ApiError(404, 'Shift not found');
+        if (shifts.some((shift) => shift._count.timeEntries > 0)) throw new ApiError(409, 'A shift with hours added can’t be removed here — open it to change it');
+        await shiftService.deleteShifts(userId, proposal.shiftIds);
+        return {
+            type: 'removeShifts',
+            count: shifts.length,
+            shiftIds: proposal.shiftIds,
+            skipped: 0,
+            undo: { type: 'addShifts', shifts: shifts.map(({ jobId, startTime, endTime, notes }) => ({ jobId, startTime, endTime, notes })), allowOverlap: true },
+        };
     }
     if (proposal.type === 'markMissed') {
         await shiftService.markMissed(userId, proposal.shiftId, { reason: proposal.reason });
@@ -199,8 +275,9 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
         const answer = quickAnswer(message);
         if (answer === 'yes') return { ...(await confirmByVoice(userId, context, pending, (saved) => quickReplyText(message, saved))), actions: [] };
         if (answer === 'no') return { reply: quickReplyText(message, 'cancelled'), pending: null, actions: [], saved: null };
-        // A pending markMissed/logHours may be about a shift outside the prompt's stretch
-        if (pending.type !== 'addShifts') await ownShift(userId, context, pending.shiftId);
+        // A pending card may be about shifts outside the prompt's stretch
+        const shiftIds = pending.type === 'removeShifts' ? pending.shiftIds : pending.shiftId ? [pending.shiftId] : [];
+        for (const shiftId of shiftIds) await ownShift(userId, context, shiftId);
     }
 
     const request = {
@@ -247,9 +324,11 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
                         answers.push({ call, response: await findShifts(userId, context, args, timeZone, now) });
                         break;
                     case 'propose_add_shifts':
+                    case 'propose_edit_shift':
+                    case 'propose_remove_shifts':
                     case 'propose_mark_missed':
                     case 'propose_log_hours':
-                        card = await cardFor(userId, context, proposalFromCall(call, context, timeZone));
+                        card = await cardFor(userId, context, await proposalFromCall(userId, call, context, timeZone), { checkClash: call.name === 'propose_add_shifts' && !args.extraShift });
                         break;
                     case 'confirm_pending': {
                         if (!pending) throw new Error('Nothing is waiting to be confirmed');

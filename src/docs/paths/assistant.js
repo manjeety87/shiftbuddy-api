@@ -2,16 +2,18 @@ const v = require('../../validation/assistant.validation');
 const { op, ok, errors, error } = require('../helpers');
 
 const tag = 'Assistant';
+const PROPOSAL_TYPES = ['addShifts', 'editShift', 'removeShifts', 'markMissed', 'logHours'];
 
 const saved = {
     type: 'object',
     description: 'What a confirmed card saved',
     properties: {
-        type: { type: 'string', enum: ['addShifts', 'markMissed', 'logHours'] },
-        count: { type: 'integer', description: 'Shifts added, or 1' },
+        type: { type: 'string', enum: PROPOSAL_TYPES },
+        count: { type: 'integer', description: 'Shifts added or removed, or 1' },
         shiftIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
         skipped: { type: 'integer', description: 'Several shifts at once: how many clashed with existing ones and were left out' },
         entryId: { type: 'string', format: 'uuid', description: 'logHours only: the new entry (for Undo)' },
+        undo: { type: 'object', additionalProperties: true, description: 'editShift and removeShifts: the proposal that puts it back — Undo sends it to /assistant/confirm' },
     },
 };
 
@@ -20,9 +22,9 @@ const card = {
     nullable: true,
     description:
         'The card waiting for a yes: a proposal (send it back unchanged as `pending`, or to /assistant/confirm) plus `preview` — ' +
-        'job names, colours and times to draw it, and for added shifts any `overlaps` with shifts already there.',
+        'job names, colours and times to draw it, for added or changed shifts any `overlaps` with shifts already there, and for a change `before` and `after`.',
     additionalProperties: true,
-    properties: { type: { type: 'string', enum: ['addShifts', 'markMissed', 'logHours'] }, preview: { type: 'object', additionalProperties: true } },
+    properties: { type: { type: 'string', enum: PROPOSAL_TYPES }, preview: { type: 'object', additionalProperties: true } },
 };
 
 const turnReply = {

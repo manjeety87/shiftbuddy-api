@@ -30,6 +30,8 @@ test('language and the quick replies follow how it was said', () => {
     assert.equal(quickReplyText('haan kardo', { type: 'addShifts', count: 3 }), 'Ho gaya, 3 shifts add kar di.');
     assert.equal(quickReplyText('yes', { type: 'markMissed', count: 1 }), 'Done, marked as missed.');
     assert.equal(quickReplyText('नहीं', 'cancelled'), 'ठीक है, सेव नहीं किया।');
+    assert.equal(quickReplyText('haan kardo', { type: 'editShift', count: 1 }), 'Ho gaya, shift badal di.');
+    assert.equal(quickReplyText('yes', { type: 'removeShifts', count: 2 }), 'Done, 2 shifts removed.');
 });
 
 test('span: local wall-clock times in the user’s zone; an end before the start is the next morning', () => {
@@ -58,11 +60,20 @@ test('prompt: the schedule lines carry ids and status, and the waiting card is d
     const text = describeProposal(pending, { jobs: [boathouse], shiftsById: new Map() }, ZONE);
     assert.equal(text, 'add a shift: Boathouse Wed 2026-10-28 09:00–17:00');
 
+    const shiftsById = new Map([[next.id, next]]);
+    const edit = { type: 'editShift', shiftId: next.id, jobId: boathouse.id, startTime: at('2026-10-28T14:00'), endTime: at('2026-10-28T22:00') };
+    assert.equal(describeProposal(edit, { jobs: [boathouse], shiftsById }, ZONE), 'change Boathouse Wed 2026-10-28 09:00–17:00 (s3) to Wed 2026-10-28 14:00–22:00');
+    assert.equal(describeProposal({ type: 'removeShifts', shiftIds: [next.id] }, { jobs: [boathouse], shiftsById }, ZONE), 'remove from the schedule: Boathouse Wed 2026-10-28 09:00–17:00 (s3)');
+
     const prompt = buildSystemPrompt({ name: 'Sam', now, timeZone: ZONE, page: 'calendar', jobs: [boathouse], shifts: [done, next], pendingText: text, features: { timesheet: false } });
     assert.match(prompt, /Monday, 26 October 2026, 12:00/);
     assert.match(prompt, /on the calendar page/);
     assert.match(prompt, /timesheet is switched off/);
     assert.ok(prompt.includes(`${boathouse.id} | Boathouse (Key Holder)`));
+    // The cases that went wrong (2026-10-27): a new time is a change, "no shift that day" is a removal
+    assert.match(prompt, /WHY SHIFTBUDDY EXISTS/);
+    assert.match(prompt, /propose_edit_shift on that shift/);
+    assert.match(prompt, /I don't have a shift that day.*propose_remove_shifts/);
 });
 
 test('tools: hours and the timesheet page only while the timesheet is on', () => {
@@ -71,6 +82,7 @@ test('tools: hours and the timesheet page only while the timesheet is on', () =>
     assert.ok(names({ timesheet: true }).includes('propose_log_hours'));
     const pages = assistantTools({ timesheet: false }).find((tool) => tool.name === 'open_page').parametersJsonSchema.properties.page.enum;
     assert.ok(!pages.includes('timesheet'));
+    for (const name of ['propose_edit_shift', 'propose_remove_shifts']) assert.ok(names({ timesheet: false }).includes(name), name);
 });
 
 test('message: history and the card are checked; a pending card keeps only what gets saved', () => {
@@ -85,6 +97,11 @@ test('message: history and the card are checked; a pending card keeps only what 
     assert.ok(parsed.pending.shifts[0].startTime instanceof Date);
     assert.equal(parsed.pending.allowOverlap, false);
     assert.equal(assistantMessageSchema.safeParse({ ...base, pending: { type: 'deleteEverything' } }).success, false);
+
+    const edit = assistantMessageSchema.parse({ ...base, pending: { type: 'editShift', shiftId: boathouse.id, jobId: boathouse.id, startTime: '2026-10-28T18:00:00.000Z', endTime: '2026-10-29T02:00:00.000Z' } });
+    assert.equal(edit.pending.allowOverlap, false);
+    assert.equal(assistantMessageSchema.safeParse({ ...base, pending: { type: 'removeShifts', shiftIds: [] } }).success, false);
+    assert.equal(assistantMessageSchema.safeParse({ ...base, pending: { type: 'removeShifts', shiftIds: ['not-an-id'] } }).success, false);
 });
 
 test('voice form: history and the card arrive as JSON text and are checked like a typed turn', () => {
