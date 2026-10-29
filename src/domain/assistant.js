@@ -210,7 +210,7 @@ Answer in the language and script of their last message, whatever earlier messag
 - English → English.
 - Hinglish in Roman letters ("kal meri shift hai") → Hinglish in Roman letters.
 - Devanagari script ("कल की शिफ्ट") → write the whole reply in Devanagari script, never Roman letters; only job names stay as written.
-Your reply is read aloud. One or two short sentences, everyday words, no lists, no markdown, no emoji. Say times like a person: "9 to 5", "9 se 5". Say dates like "Tuesday the 28th".
+Your reply is read aloud. One or two short sentences, everyday words, no lists, no markdown, no emoji. Say times like a person: "9 to 5", "9 se 5". The schedule and the tools use 24-hour times, but never say one: 14:00 is "2 PM" (Hinglish "2 baje"), 22:30 is "10:30 PM". Say dates like "Tuesday the 28th".
 
 HOW TO ACT
 - Work through the tools. Never say something is saved unless confirm_pending ran in this turn.
@@ -237,7 +237,7 @@ PENDING
 ${pendingText}`;
 };
 
-const reply = { type: 'string', description: 'What to say to the person, in their language: one or two short spoken sentences' };
+const reply = { type: 'string', description: 'What to say to the person, in their language: one or two short spoken sentences, times in 12-hour words ("2 PM", never "14:00")' };
 const date = { type: 'string', description: 'Calendar day, YYYY-MM-DD' };
 const time = (what) => ({ type: 'string', description: `${what}, 24-hour HH:mm` });
 const id = (what) => ({ type: 'string', description: `The ${what}'s id, exactly as listed` });
