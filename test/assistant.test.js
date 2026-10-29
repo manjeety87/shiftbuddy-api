@@ -4,7 +4,7 @@ process.env.TZ = 'America/Toronto';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime } = require('luxon');
-const { quickAnswer, languageOf, quickReplyText, spanOn, describeShift, describeProposal, buildSystemPrompt, assistantTools } = require('../src/domain/assistant');
+const { quickAnswer, languageOf, quickReplyText, spanOn, describeShift, describeProposal, sameJobShiftToChange, askChangeText, buildSystemPrompt, assistantTools } = require('../src/domain/assistant');
 const { assistantMessageSchema } = require('../src/validation/assistant.validation');
 
 const ZONE = 'America/Toronto';
@@ -113,4 +113,23 @@ test('voice form: history and the card arrive as JSON text and are checked like 
     assert.deepEqual(assistantVoiceSchema.parse({ timeZone: ZONE }), { timeZone: ZONE, history: [], pending: null });
     assert.equal(assistantVoiceSchema.safeParse({ timeZone: ZONE, history: '[not json' }).success, false);
     assert.equal(assistantVoiceSchema.safeParse({ timeZone: ZONE, pending: JSON.stringify({ type: 'deleteEverything' }) }).success, false);
+});
+
+test('a new shift on top of one at the same job is a change of that shift; another job or several shifts are not', () => {
+    const cafe = { ...boathouse, id: 'cafe0000-0000-4000-8000-000000000002', companyName: 'Cafe' };
+    const thursday = { id: 'shift-1', startTime: at('2026-10-29T09:00'), endTime: at('2026-10-29T17:30'), job: boathouse };
+    const later = { jobId: boathouse.id, startTime: at('2026-10-29T14:00'), endTime: at('2026-10-29T22:00') };
+
+    assert.equal(sameJobShiftToChange([later], [thursday]), thursday);
+    assert.equal(sameJobShiftToChange([{ ...later, jobId: cafe.id }], [thursday]), null);
+    assert.equal(sameJobShiftToChange([later, later], [thursday]), null);
+    // Two of their shifts at that job in the way: which one is meant isn't clear
+    assert.equal(sameJobShiftToChange([later], [thursday, { ...thursday, id: 'shift-2' }]), null);
+    assert.equal(sameJobShiftToChange([later], []), null);
+});
+
+test('the question for a changed card follows how it was said', () => {
+    const after = { jobName: 'Boathouse', startTime: at('2026-10-29T14:00'), endTime: at('2026-10-29T22:30') };
+    assert.equal(askChangeText('Thursday is now 2 to 10:30', after, ZONE), 'That’s your Boathouse shift — change it to 2 PM–10:30 PM?');
+    assert.equal(askChangeText('thursday ko 2 se 10:30 hai bhai', after, ZONE), 'Boathouse wali shift ko 2 PM–10:30 PM kar du?');
 });

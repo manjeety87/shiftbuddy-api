@@ -150,6 +150,30 @@ const describeProposal = (proposal, { jobs, shiftsById }, timeZone) => {
 };
 
 /**
+ * One new shift that overlaps exactly one shift at the same job is that shift with new
+ * times: nobody works two overlapping shifts at one workplace. The prompt asks the model
+ * for propose_edit_shift here, but it still adds now and then (and calls it "extra" when
+ * sent back), so this is decided in code. Returns the shift to change, or null.
+ */
+const sameJobShiftToChange = (candidates, clashes) => {
+    if (candidates.length !== 1) return null;
+    const sameJob = clashes.filter((shift) => shift.job.id === candidates[0].jobId);
+    return sameJob.length === 1 ? sameJob[0] : null;
+};
+
+const ASK_CHANGE = {
+    english: (job, from, to) => `That’s your ${job} shift — change it to ${from}–${to}?`,
+    hinglish: (job, from, to) => `${job} wali shift ko ${from}–${to} kar du?`,
+    hindi: (job, from, to) => `${job} वाली शिफ्ट ${from}–${to} कर दूँ?`,
+};
+
+/** The question for a card that became a change, so the words match the card. */
+const askChangeText = (message, { jobName: job, startTime, endTime }, timeZone) => {
+    const time = (date) => local(date, timeZone).toFormat(local(date, timeZone).minute ? 'h:mm a' : 'h a');
+    return ASK_CHANGE[languageOf(message)](job, time(startTime), time(endTime));
+};
+
+/**
  * Everything the model knows about this person and this moment. The schedule is
  * in the prompt (a week back, two ahead) so most requests need one model call;
  * older or later shifts are looked up with find_shifts.
@@ -286,4 +310,4 @@ const assistantTools = (features) => [
     { name: 'close_panels', description: 'Close any open panels.', parametersJsonSchema: { type: 'object', properties: { reply }, required: ['reply'] } },
 ];
 
-module.exports = { quickAnswer, languageOf, quickReplyText, localToDate, spanOn, describeShift, describeProposal, buildSystemPrompt, assistantTools };
+module.exports = { quickAnswer, languageOf, quickReplyText, localToDate, spanOn, describeShift, describeProposal, sameJobShiftToChange, askChangeText, buildSystemPrompt, assistantTools };

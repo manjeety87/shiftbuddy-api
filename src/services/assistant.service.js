@@ -6,7 +6,7 @@ const shiftService = require('./shift.service');
 const timesheetService = require('./timesheet.service');
 const { NOT_MISSED } = require('../constants/shifts');
 const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
-const { quickAnswer, quickReplyText, spanOn, describeShift, describeProposal, buildSystemPrompt, assistantTools } = require('../domain/assistant');
+const { quickAnswer, quickReplyText, spanOn, describeShift, describeProposal, sameJobShiftToChange, askChangeText, buildSystemPrompt, assistantTools } = require('../domain/assistant');
 const { jobName } = require('../domain/jobLabels');
 const { overlaps } = require('../domain/shifts');
 const { resolveFeatures } = require('../domain/features');
@@ -62,8 +62,11 @@ const ownShift = async (userId, context, shiftId) => {
  * proposal can't be made — wrong id, a shift that already has hours, and so on.
  * `checkClash`: a fresh card from the model that lands on a shift they already have
  * is sent back once — "Thursday is now 2 to 10" means change that shift, not add one.
+ * `changeSameJob`: a fresh card that lands on a shift at the same job becomes a change
+ * of that shift (`sameJobShiftToChange`). Not for a waiting card: it mustn't turn into
+ * another card under the person.
  */
-const cardFor = async (userId, context, proposal, { checkClash = false } = {}) => {
+const cardFor = async (userId, context, proposal, { checkClash = false, changeSameJob = false } = {}) => {
     if (proposal.type === 'addShifts') {
         const jobOf = (id) => context.jobs.find((job) => job.id === id);
         const missing = proposal.shifts.find((shift) => !jobOf(shift.jobId));
@@ -76,6 +79,11 @@ const cardFor = async (userId, context, proposal, { checkClash = false } = {}) =
             select: { id: true, startTime: true, endTime: true, job: { select: jobFields } },
         });
         const clashes = existing.filter((shift) => proposal.shifts.some((candidate) => overlaps(candidate, shift)));
+        const toChange = changeSameJob && sameJobShiftToChange(proposal.shifts, clashes);
+        if (toChange) {
+            const [shift] = proposal.shifts;
+            return cardFor(userId, context, { type: 'editShift', shiftId: toChange.id, jobId: shift.jobId, startTime: shift.startTime, endTime: shift.endTime });
+        }
         if (checkClash && clashes.length > 0) {
             // By id: the model reads its times from SCHEDULE, in their zone
             const listed = clashes.map((shift) => `${jobName(shift.job)} (${shift.id})`).join('; ');
@@ -328,7 +336,15 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
                     case 'propose_remove_shifts':
                     case 'propose_mark_missed':
                     case 'propose_log_hours':
-                        card = await cardFor(userId, context, await proposalFromCall(userId, call, context, timeZone), { checkClash: call.name === 'propose_add_shifts' && !args.extraShift });
+                        card = await cardFor(userId, context, await proposalFromCall(userId, call, context, timeZone), {
+                            checkClash: call.name === 'propose_add_shifts' && !args.extraShift,
+                            changeSameJob: call.name === 'propose_add_shifts',
+                        });
+                        // The model's words were about adding; the card now changes a shift
+                        if (call.name === 'propose_add_shifts' && card.type === 'editShift') {
+                            if (args.reply) replies.pop();
+                            replies.push(askChangeText(message, card.preview.after, timeZone));
+                        }
                         break;
                     case 'confirm_pending': {
                         if (!pending) throw new Error('Nothing is waiting to be confirmed');
