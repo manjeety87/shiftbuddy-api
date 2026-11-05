@@ -23,7 +23,11 @@ const ASSISTANT_PAGES = ['home', 'shifts', 'calendar', 'jobs', 'timesheet', 'sha
 /** Panels it can open without a shift: new shift/job/hours forms, pay, scan, statement, themes. */
 const ASSISTANT_PANELS = ['newShift', 'newJob', 'addHours', 'paySummary', 'scan', 'statement', 'themes'];
 
+// A job the assistant adds gets the first of these its owner isn't using yet (the app's job colours, web JobSheet)
+const JOB_COLOURS = ['#6B8F71', '#B85C4E', '#C99A3A', '#5B8A9A', '#9B7EBD', '#C77B8E', '#7A9E7E'];
+
 module.exports = {
+    JOB_COLOURS,
     MAX_ASSISTANT_MESSAGE,
     MAX_ASSISTANT_HISTORY,
     MAX_HISTORY_TEXT,

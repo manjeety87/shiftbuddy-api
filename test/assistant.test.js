@@ -4,7 +4,7 @@ process.env.TZ = 'America/Toronto';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime } = require('luxon');
-const { quickAnswer, languageOf, quickReplyText, spanOn, describeShift, describeProposal, sameJobShiftToChange, askChangeText, buildSystemPrompt, assistantTools } = require('../src/domain/assistant');
+const { quickAnswer, languageOf, quickReplyText, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, quickReplySpeech, buildSystemPrompt, assistantTools } = require('../src/domain/assistant');
 const { assistantMessageSchema } = require('../src/validation/assistant.validation');
 
 const ZONE = 'America/Toronto';
@@ -72,17 +72,17 @@ test('prompt: the schedule lines carry ids and status, and the waiting card is d
     assert.ok(prompt.includes(`${boathouse.id} | Boathouse (Key Holder)`));
     // The cases that went wrong (2026-10-27): a new time is a change, "no shift that day" is a removal
     assert.match(prompt, /WHY SHIFTBUDDY EXISTS/);
-    assert.match(prompt, /propose_edit_shift on that shift/);
-    assert.match(prompt, /I don't have a shift that day.*propose_remove_shifts/);
+    assert.match(prompt, /edit_shift on that shift/);
+    assert.match(prompt, /I don't have a shift that day.*remove_shifts/);
 });
 
 test('tools: hours and the timesheet page only while the timesheet is on', () => {
     const names = (features) => assistantTools(features).map((tool) => tool.name);
-    assert.ok(!names({ timesheet: false }).includes('propose_log_hours'));
-    assert.ok(names({ timesheet: true }).includes('propose_log_hours'));
+    assert.ok(!names({ timesheet: false }).includes('log_hours'));
+    assert.ok(names({ timesheet: true }).includes('log_hours'));
     const pages = assistantTools({ timesheet: false }).find((tool) => tool.name === 'open_page').parametersJsonSchema.properties.page.enum;
     assert.ok(!pages.includes('timesheet'));
-    for (const name of ['propose_edit_shift', 'propose_remove_shifts']) assert.ok(names({ timesheet: false }).includes(name), name);
+    for (const name of ['edit_shift', 'remove_shifts']) assert.ok(names({ timesheet: false }).includes(name), name);
 });
 
 test('message: history and the card are checked; a pending card keeps only what gets saved', () => {
@@ -128,8 +128,30 @@ test('a new shift on top of one at the same job is a change of that shift; anoth
     assert.equal(sameJobShiftToChange([later], []), null);
 });
 
-test('the question for a changed card follows how it was said', () => {
+test('words for a save code changed or held back: the language it was said in, a Devanagari copy for Hinglish', () => {
     const after = { jobName: 'Boathouse', startTime: at('2026-10-29T14:00'), endTime: at('2026-10-29T22:30') };
-    assert.equal(askChangeText('Thursday is now 2 to 10:30', after, ZONE), 'That’s your Boathouse shift — change it to 2 PM–10:30 PM?');
-    assert.equal(askChangeText('thursday ko 2 se 10:30 hai bhai', after, ZONE), 'Boathouse wali shift ko 2 PM–10:30 PM kar du?');
+    assert.deepEqual(changeText('Thursday is now 2 to 10:30', after, ZONE, { done: true }), { reply: 'Done, your Boathouse shift is now 2 PM–10:30 PM.', speech: null });
+    assert.deepEqual(changeText('Thursday is now 2 to 10:30', after, ZONE, { done: false }), { reply: 'That’s your Boathouse shift — change it to 2 PM–10:30 PM?', speech: null });
+    assert.deepEqual(changeText('thursday ko 2 se 10:30 hai bhai', after, ZONE, { done: true }), { reply: 'Ho gaya, Boathouse wali shift ab 2 PM–10:30 PM hai.', speech: 'हो गया, Boathouse वाली शिफ्ट अब 2 PM–10:30 PM है।' });
+    assert.equal(clashText('शिफ्ट जोड़ दो', after, ZONE).speech, null);
+    assert.match(clashText('shift add kardo', after, ZONE).reply, /clash ho rahi hai/);
+});
+
+test('quick replies: Hinglish gets a Devanagari copy for the voice; English and Hindi are read as they are', () => {
+    assert.equal(quickReplySpeech('haan kardo', { type: 'deleteJob', count: 1 }), 'हो गया, जॉब डिलीट कर दी।');
+    assert.equal(quickReplySpeech('yes', { type: 'removeShifts', count: 1 }), null);
+    assert.equal(quickReplySpeech('हाँ', 'cancelled'), null);
+});
+
+test('a new job gets the first job colour none of theirs has', () => {
+    assert.equal(nextJobColour([]), '#6B8F71');
+    assert.equal(nextJobColour([{ color: '#6b8f71' }]), '#B85C4E');
+});
+
+test('tools: only removing shifts and deleting a job wait for a yes; every tool can carry speech', () => {
+    const tools = assistantTools({ timesheet: true });
+    for (const name of ['add_job', 'edit_job', 'delete_job', 'find_conflicts', 'answer']) assert.ok(tools.some((item) => item.name === name), name);
+    const waits = tools.filter((item) => /waits for a yes/.test(item.description)).map((item) => item.name);
+    assert.deepEqual(waits, ['remove_shifts', 'delete_job']);
+    for (const item of tools.filter((entry) => entry.parametersJsonSchema.properties.reply)) assert.ok(item.parametersJsonSchema.properties.speech, item.name);
 });

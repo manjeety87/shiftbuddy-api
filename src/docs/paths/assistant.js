@@ -2,7 +2,7 @@ const v = require('../../validation/assistant.validation');
 const { op, ok, errors, error } = require('../helpers');
 
 const tag = 'Assistant';
-const PROPOSAL_TYPES = ['addShifts', 'editShift', 'removeShifts', 'markMissed', 'logHours'];
+const PROPOSAL_TYPES = ['addShifts', 'editShift', 'removeShifts', 'markMissed', 'logHours', 'addJob', 'editJob', 'deleteJob', 'restoreJob'];
 
 const saved = {
     type: 'object',
@@ -31,6 +31,7 @@ const turnReply = {
     type: 'object',
     properties: {
         reply: { type: 'string', description: 'What to say (and show), in the person’s language' },
+        speech: { type: 'string', nullable: true, description: 'Hinglish replies only: the same words in Devanagari, for a Hindi voice to read aloud' },
         pending: card,
         actions: {
             type: 'array',

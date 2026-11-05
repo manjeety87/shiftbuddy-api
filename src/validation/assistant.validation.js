@@ -2,6 +2,7 @@ const { z } = require('zod');
 const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_HISTORY, MAX_HISTORY_TEXT, MAX_PROPOSED_SHIFTS, ASSISTANT_PAGES } = require('../constants/assistant');
 const { MISSED_REASONS } = require('../constants/shifts');
 const { uuid, timeZone } = require('./common.validation');
+const { createJobSchema, updateJobSchema } = require('./job.validation');
 
 // What the assistant offers to do and the person confirms (by voice or on the card).
 // The client keeps it between turns and sends it back, so it is checked again here;
@@ -36,6 +37,17 @@ const proposalSchema = z.discriminatedUnion('type', [
         type: z.literal('markMissed'),
         shiftId: uuid('Invalid shift ID'),
         reason: z.enum(MISSED_REASONS),
+    }),
+    // A job the assistant added (saved at once; this comes back only as a card waiting on a clash-free yes)
+    z.object({ type: z.literal('addJob'), job: createJobSchema }),
+    z.object({ type: z.literal('editJob'), jobId: uuid('Invalid job ID'), changes: updateJobSchema }),
+    // Deleting a job always waits for a yes
+    z.object({ type: z.literal('deleteJob'), jobId: uuid('Invalid job ID') }),
+    // Only as Undo of deleteJob: the job back, with the upcoming shifts that went with it
+    z.object({
+        type: z.literal('restoreJob'),
+        jobId: uuid('Invalid job ID'),
+        shifts: z.array(z.object({ startTime: z.coerce.date(), endTime: z.coerce.date(), notes: z.string().max(500).nullable().optional() })).max(500),
     }),
     z.object({
         type: z.literal('logHours'),

@@ -3,15 +3,18 @@ const prisma = require('../config/prisma');
 const ApiError = require('../utils/ApiError');
 const { generateWithFallback } = require('../utils/gemini');
 const shiftService = require('./shift.service');
+const jobService = require('./job.service');
+const { findConflicts } = require('./conflict.service');
 const timesheetService = require('./timesheet.service');
 const { NOT_MISSED } = require('../constants/shifts');
 const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
-const { quickAnswer, quickReplyText, spanOn, describeShift, describeProposal, sameJobShiftToChange, askChangeText, buildSystemPrompt, assistantTools } = require('../domain/assistant');
+const { quickAnswer, languageOf, quickReplyText, quickReplySpeech, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, buildSystemPrompt, assistantTools } = require('../domain/assistant');
 const { jobName } = require('../domain/jobLabels');
 const { overlaps } = require('../domain/shifts');
 const { resolveFeatures } = require('../domain/features');
 const { autoBreakMinutes } = require('../domain/timesheet');
 const { createShiftSchema, updateShiftSchema } = require('../validation/shift.validation');
+const { createJobSchema, updateJobSchema } = require('../validation/job.validation');
 
 const jobFields = { id: true, title: true, companyName: true, color: true };
 const shiftFields = { id: true, startTime: true, endTime: true, missedReason: true, job: { select: jobFields }, timeEntries: { select: { clockIn: true, clockOut: true, breakMinutes: true } } };
@@ -67,6 +70,34 @@ const ownShift = async (userId, context, shiftId) => {
  * another card under the person.
  */
 const cardFor = async (userId, context, proposal, { checkClash = false, changeSameJob = false } = {}) => {
+    const knownJob = (jobId) => {
+        const job = context.jobs.find((item) => item.id === jobId);
+        if (!job) throw new Error(`Unknown jobId ${jobId} — use an id from JOBS`);
+        return job;
+    };
+
+    if (proposal.type === 'addJob') {
+        const checked = createJobSchema.safeParse({ color: nextJobColour(context.jobs), ...proposal.job });
+        if (!checked.success) throw new Error(`Can’t add that job: ${checked.error.issues[0].message}`);
+        const twin = context.jobs.find((job) => jobName(job).toLowerCase() === jobName(checked.data).toLowerCase());
+        if (twin) throw new Error(`They already have ${jobName(twin)} (${twin.id}) — change it with edit_job, or ask how the new one differs`);
+        return { type: 'addJob', job: checked.data, preview: jobCard(checked.data) };
+    }
+
+    if (proposal.type === 'editJob') {
+        const job = knownJob(proposal.jobId);
+        const checked = updateJobSchema.safeParse(proposal.changes);
+        if (!checked.success) throw new Error(`Can’t change that job: ${checked.error.issues[0].message}`);
+        if (Object.keys(checked.data).length === 0) throw new Error('Nothing to change — give companyName, title or hourlyRate');
+        return { ...proposal, changes: checked.data, preview: { before: jobCard(job), after: jobCard({ ...job, ...checked.data }) } };
+    }
+
+    if (proposal.type === 'deleteJob') {
+        const job = knownJob(proposal.jobId);
+        const upcomingShifts = await prisma.shift.count({ where: { userId, jobId: job.id, startTime: { gt: new Date() } } });
+        return { ...proposal, preview: { ...jobCard(job), upcomingShifts } };
+    }
+
     if (proposal.type === 'addShifts') {
         const jobOf = (id) => context.jobs.find((job) => job.id === id);
         const missing = proposal.shifts.find((shift) => !jobOf(shift.jobId));
@@ -88,7 +119,7 @@ const cardFor = async (userId, context, proposal, { checkClash = false, changeSa
             // By id: the model reads its times from SCHEDULE, in their zone
             const listed = clashes.map((shift) => `${jobName(shift.job)} (${shift.id})`).join('; ');
             throw new Error(
-                `They already have a shift at that time: ${listed}. If that shift's time or day changed, use propose_edit_shift on it. If it's off their schedule and this replaces it, remove it. Only if they said this is an extra shift, call propose_add_shifts again with extraShift true.`
+                `They already have a shift at that time: ${listed}. If that shift's time or day changed, use edit_shift on it. If it's off their schedule and this replaces it, remove it with remove_shifts. Only if they said this is an extra shift, call add_shifts again with extraShift true.`
             );
         }
         return {
@@ -149,10 +180,17 @@ const cardFor = async (userId, context, proposal, { checkClash = false, changeSa
     return { ...proposal, preview: { ...shiftPreview, clockIn: proposal.clockIn, clockOut: proposal.clockOut, breakMinutes, paidMinutes: Math.max(0, workedMinutes - breakMinutes) } };
 };
 
+/** Only the job details the model gave: an edit changes what was said and nothing else. */
+const jobDetailsFrom = ({ companyName, title, hourlyRate }) => ({
+    ...(companyName !== undefined && { companyName }),
+    ...(title !== undefined && { title }),
+    ...(hourlyRate !== undefined && { hourlyRate }),
+});
+
 /** A tool call's arguments → a proposal, in UTC on the person's calendar. */
 const proposalFromCall = async (userId, call, context, timeZone) => {
     const { args } = call;
-    if (call.name === 'propose_add_shifts') {
+    if (call.name === 'add_shifts') {
         const shifts = (args.shifts ?? []).map((shift) => {
             const span = spanOn(shift.date, shift.start, shift.end, timeZone);
             if (!span) throw new Error(`Couldn’t read ${shift.date} ${shift.start}–${shift.end}; use YYYY-MM-DD and HH:mm`);
@@ -161,17 +199,20 @@ const proposalFromCall = async (userId, call, context, timeZone) => {
         if (shifts.length === 0) throw new Error('No shifts given');
         return { type: 'addShifts', shifts };
     }
-    if (call.name === 'propose_mark_missed') return { type: 'markMissed', shiftId: args.shiftId, reason: args.reason };
-    if (call.name === 'propose_remove_shifts') {
+    if (call.name === 'mark_missed') return { type: 'markMissed', shiftId: args.shiftId, reason: args.reason };
+    if (call.name === 'remove_shifts') {
         if (!args.shiftIds?.length) throw new Error('No shifts given');
         return { type: 'removeShifts', shiftIds: args.shiftIds };
     }
+    if (call.name === 'add_job') return { type: 'addJob', job: jobDetailsFrom(args) };
+    if (call.name === 'edit_job') return { type: 'editJob', jobId: args.jobId, changes: jobDetailsFrom(args) };
+    if (call.name === 'delete_job') return { type: 'deleteJob', jobId: args.jobId };
 
     const shift = await ownShift(userId, context, args.shiftId);
     if (!shift) throw new Error(`Unknown shiftId ${args.shiftId} — use an id from SCHEDULE or find_shifts`);
     const own = (date) => DateTime.fromJSDate(date, { zone: timeZone });
 
-    if (call.name === 'propose_edit_shift') {
+    if (call.name === 'edit_shift') {
         // Only what changed is given; the rest is the shift as it is
         const day = args.date ?? own(shift.startTime).toISODate();
         const start = args.start ?? own(shift.startTime).toFormat('HH:mm');
@@ -204,12 +245,51 @@ const findShifts = async (userId, context, { from, to, jobId }, timeZone, now) =
     return { shifts: shifts.map((shift) => describeShift(shift, timeZone, now)) };
 };
 
+/** find_conflicts: their overlapping shifts from now on, each pair as two schedule lines. */
+const findClashes = async (userId, context, timeZone, now) => {
+    const { overlaps: pairs } = await findConflicts(userId);
+    const lines = pairs.slice(0, MAX_LOOKUP_SHIFTS).map(({ first, second }) => {
+        context.shiftsById.set(first.id, first);
+        context.shiftsById.set(second.id, second);
+        return `${describeShift(first, timeZone, now)}  OVERLAPS  ${describeShift(second, timeZone, now)}`;
+    });
+    return { overlaps: lines.length ? lines : 'none — no shifts overlap' };
+};
+
 /**
  * Saves a confirmed proposal through the same services and rules as the app's
  * own forms. Returns what changed, so the app can refresh and say it. A change or a
  * removal also returns `undo`: the proposal that puts it back, sent to /assistant/confirm.
  */
 const applyProposal = async (userId, proposal) => {
+    if (proposal.type === 'addJob') {
+        const checked = createJobSchema.safeParse(proposal.job);
+        if (!checked.success) throw new ApiError(400, checked.error.issues[0].message);
+        const job = await jobService.createJob(userId, checked.data);
+        return { type: 'addJob', count: 1, shiftIds: [], skipped: 0, jobId: job.id, undo: { type: 'deleteJob', jobId: job.id } };
+    }
+    if (proposal.type === 'editJob') {
+        const before = await jobService.getJobById(userId, proposal.jobId);
+        const checked = updateJobSchema.safeParse(proposal.changes);
+        if (!checked.success) throw new ApiError(400, checked.error.issues[0].message);
+        await jobService.updateJob(userId, proposal.jobId, checked.data);
+        // Undo sets back only what this changed
+        const previous = Object.fromEntries(Object.keys(checked.data).map((field) => [field, before[field]]));
+        return { type: 'editJob', count: 1, shiftIds: [], skipped: 0, jobId: proposal.jobId, undo: { type: 'editJob', jobId: proposal.jobId, changes: previous } };
+    }
+    if (proposal.type === 'deleteJob') {
+        // Its upcoming shifts go with it (job.service); Undo brings them back
+        const upcoming = await prisma.shift.findMany({ where: { userId, jobId: proposal.jobId, startTime: { gt: new Date() } }, select: { startTime: true, endTime: true, notes: true } });
+        await jobService.deleteJob(userId, proposal.jobId);
+        return { type: 'deleteJob', count: 1, shiftIds: [], skipped: 0, jobId: proposal.jobId, undo: { type: 'restoreJob', jobId: proposal.jobId, shifts: upcoming } };
+    }
+    if (proposal.type === 'restoreJob') {
+        const job = await prisma.job.findFirst({ where: { id: proposal.jobId, userId }, select: { id: true } });
+        if (!job) throw new ApiError(404, 'Job not found');
+        await prisma.job.update({ where: { id: job.id, userId }, data: { isActive: true } });
+        const { created } = proposal.shifts.length ? await shiftService.createShiftsBulk(userId, proposal.shifts.map((shift) => ({ jobId: job.id, ...shift }))) : { created: [] };
+        return { type: 'restoreJob', count: 1, shiftIds: created.map((shift) => shift.id), skipped: proposal.shifts.length - created.length, jobId: job.id };
+    }
     if (proposal.type === 'addShifts') {
         const shifts = proposal.shifts.map((shift) => {
             const checked = createShiftSchema.safeParse(shift);
@@ -268,11 +348,81 @@ const confirmByVoice = async (userId, context, pending, replyFor) => {
     }
 };
 
+// Deleting waits for a yes; so does a save the app had to warn about (a clash is a decision)
+const needsYes = (card) => card.type === 'removeShifts' || card.type === 'deleteJob' || card.allowOverlap === true;
+
+/** A save started by the model: a refusal (a clash that appeared, bad input) goes back to it as an error to fix or say. */
+const saveForModel = async (userId, card) => {
+    try {
+        return await applyProposal(userId, card);
+    } catch (err) {
+        if (err instanceof ApiError && err.statusCode < 500) throw new Error(err.message);
+        throw err;
+    }
+};
+
+/** add_shifts … delete_job: make the change, or put it on a card when it needs a yes. */
+const change = async (args, turn, name) => {
+    const proposal = await proposalFromCall(turn.userId, { name, args }, turn.context, turn.timeZone);
+    const card = await cardFor(turn.userId, turn.context, proposal, { checkClash: name === 'add_shifts' && !args.extraShift, changeSameJob: name === 'add_shifts' });
+    // The model asked to add; code made it a change, so the model's words don't fit
+    const becameChange = name === 'add_shifts' && card.type === 'editShift';
+    if (needsYes(card)) {
+        const clash = card.allowOverlap && card.preview.overlaps[0];
+        const say = clash ? clashText(turn.message, clash, turn.timeZone) : becameChange ? changeText(turn.message, card.preview.after, turn.timeZone, { done: false }) : undefined;
+        return { card, say };
+    }
+    const saved = await saveForModel(turn.userId, card);
+    return { saved, say: becameChange ? changeText(turn.message, card.preview.after, turn.timeZone, { done: true }) : undefined };
+};
+
 /**
- * One turn of the conversation. Answers with what to say, the card now waiting
- * (or null), what to open in the app, and what was saved. A plain "yes"/"no" to
- * a waiting card skips the model; everything else is one to MAX_ASSISTANT_STEPS
- * model calls (look something up, then act).
+ * Tool name → what it does, like the `available_tools` map of a plain agent loop.
+ * `observe` goes back to the model (a lookup, a mistake); anything else ends the turn:
+ * a `card` waiting for a yes, something `saved`, an `action` for the app, or words to `say`.
+ */
+const TOOLS = {
+    find_shifts: async (args, turn) => ({ observe: await findShifts(turn.userId, turn.context, args, turn.timeZone, turn.now) }),
+    find_conflicts: async (args, turn) => ({ observe: await findClashes(turn.userId, turn.context, turn.timeZone, turn.now) }),
+    add_shifts: change,
+    edit_shift: change,
+    remove_shifts: change,
+    mark_missed: change,
+    log_hours: change,
+    add_job: change,
+    edit_job: change,
+    delete_job: change,
+    confirm_pending: async (args, turn) => {
+        if (!turn.pending) throw new Error('Nothing is waiting to be confirmed');
+        const outcome = await confirmByVoice(turn.userId, turn.context, turn.pending, () => args.reply);
+        // Not saved: the reason is said instead of the model's "done"
+        return { card: outcome.pending, saved: outcome.saved, say: outcome.saved ? undefined : { reply: outcome.reply, speech: null } };
+    },
+    cancel_pending: async () => ({ card: null }),
+    open_page: async (args) => ({ action: { type: 'openPage', page: args.page } }),
+    open_shift: async (args, turn) => {
+        if (!(await ownShift(turn.userId, turn.context, args.shiftId))) throw new Error(`Unknown shiftId ${args.shiftId}`);
+        return { action: { type: 'openShift', shiftId: args.shiftId } };
+    },
+    open_panel: async (args) => ({ action: { type: 'openPanel', panel: args.panel } }),
+    close_panels: async () => ({ action: { type: 'closePanels' } }),
+    answer: async () => ({}),
+};
+
+// The model sometimes copies the Roman reply into speech; that isn't a copy a Hindi voice can read
+const devanagariOnly = (speech) => (speech && languageOf(speech) === 'hindi' ? speech : null);
+
+/** The turn's words: the reply, and the Devanagari copy only when every part has one (else the voice reads the reply). */
+const wordsOf = (parts) => ({
+    reply: parts.map((part) => part.reply).join(' ') || 'Done.',
+    speech: parts.length > 0 && parts.every((part) => part.speech) ? parts.map((part) => part.speech).join(' ') : null,
+});
+
+/**
+ * One turn of the conversation. Answers with what to say (`speech`: how a Hindi
+ * voice should say it), the card now waiting (or null), what to open in the app,
+ * and what was saved. A plain "yes"/"no" to a waiting card skips the model;
+ * everything else is one to MAX_ASSISTANT_STEPS model calls (look up, then act).
  */
 const respond = async (userId, { message, history, pending, page, timeZone }) => {
     const now = new Date();
@@ -281,15 +431,19 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
 
     if (pending) {
         const answer = quickAnswer(message);
-        if (answer === 'yes') return { ...(await confirmByVoice(userId, context, pending, (saved) => quickReplyText(message, saved))), actions: [] };
-        if (answer === 'no') return { reply: quickReplyText(message, 'cancelled'), pending: null, actions: [], saved: null };
+        if (answer === 'yes') {
+            const outcome = await confirmByVoice(userId, context, pending, (saved) => quickReplyText(message, saved));
+            return { ...outcome, speech: outcome.saved ? quickReplySpeech(message, outcome.saved) : null, actions: [] };
+        }
+        if (answer === 'no') return { reply: quickReplyText(message, 'cancelled'), speech: quickReplySpeech(message, 'cancelled'), pending: null, actions: [], saved: null };
         // A pending card may be about shifts outside the prompt's stretch
         const shiftIds = pending.type === 'removeShifts' ? pending.shiftIds : pending.shiftId ? [pending.shiftId] : [];
         for (const shiftId of shiftIds) await ownShift(userId, context, shiftId);
     }
 
+    const turn = { userId, context, timeZone, now, message, pending };
     const request = {
-        contents: [...history.map((turn) => ({ role: turn.role === 'assistant' ? 'model' : 'user', parts: [{ text: turn.text }] })), { role: 'user', parts: [{ text: message }] }],
+        contents: [...history.map((line) => ({ role: line.role === 'assistant' ? 'model' : 'user', parts: [{ text: line.text }] })), { role: 'user', parts: [{ text: message }] }],
         config: {
             systemInstruction: buildSystemPrompt({
                 name: context.user.name,
@@ -302,6 +456,8 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
                 features: context.features,
             }),
             tools: [{ functionDeclarations: assistantTools(context.features) }],
+            // Always a tool call, plain answers included (`answer`): every reply then carries its `speech`
+            toolConfig: { functionCallingConfig: { mode: 'ANY' } },
             temperature: 0.2,
             // A little thinking resolves "parso" and "next Friday" right; more only adds seconds
             thinkingConfig: { thinkingLevel: 'low' },
@@ -312,84 +468,49 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
         const response = await generateWithFallback(request, GEMINI_MESSAGES);
         const calls = response.functionCalls ?? [];
         if (calls.length === 0) {
-            return { reply: response.text?.trim() || 'Sorry, I didn’t catch that — say it again?', pending: await keepPending(), actions: [], saved: null };
+            return { reply: response.text?.trim() || 'Sorry, I didn’t catch that — say it again?', speech: null, pending: await keepPending(), actions: [], saved: null };
         }
 
         // The model's own turn goes back as it came (newer models sign their tool calls)
         request.contents.push(response.candidates[0].content);
-        const replies = [];
+        const parts = [];
         const actions = [];
-        const answers = [];
+        const observations = [];
         let card;
         let saved = null;
+        let ended = false;
 
         for (const call of calls) {
             const args = call.args ?? {};
-            if (args.reply) replies.push(args.reply);
             try {
-                switch (call.name) {
-                    case 'find_shifts':
-                        answers.push({ call, response: await findShifts(userId, context, args, timeZone, now) });
-                        break;
-                    case 'propose_add_shifts':
-                    case 'propose_edit_shift':
-                    case 'propose_remove_shifts':
-                    case 'propose_mark_missed':
-                    case 'propose_log_hours':
-                        card = await cardFor(userId, context, await proposalFromCall(userId, call, context, timeZone), {
-                            checkClash: call.name === 'propose_add_shifts' && !args.extraShift,
-                            changeSameJob: call.name === 'propose_add_shifts',
-                        });
-                        // The model's words were about adding; the card now changes a shift
-                        if (call.name === 'propose_add_shifts' && card.type === 'editShift') {
-                            if (args.reply) replies.pop();
-                            replies.push(askChangeText(message, card.preview.after, timeZone));
-                        }
-                        break;
-                    case 'confirm_pending': {
-                        if (!pending) throw new Error('Nothing is waiting to be confirmed');
-                        const outcome = await confirmByVoice(userId, context, pending, () => args.reply);
-                        if (!outcome.saved) replies.splice(replies.length - 1, 1, outcome.reply);
-                        card = outcome.pending;
-                        saved = outcome.saved;
-                        break;
-                    }
-                    case 'cancel_pending':
-                        card = null;
-                        break;
-                    case 'open_page':
-                        actions.push({ type: 'openPage', page: args.page });
-                        break;
-                    case 'open_shift':
-                        if (!(await ownShift(userId, context, args.shiftId))) throw new Error(`Unknown shiftId ${args.shiftId}`);
-                        actions.push({ type: 'openShift', shiftId: args.shiftId });
-                        break;
-                    case 'open_panel':
-                        actions.push({ type: 'openPanel', panel: args.panel });
-                        break;
-                    case 'close_panels':
-                        actions.push({ type: 'closePanels' });
-                        break;
-                    default:
-                        throw new Error(`There is no tool called ${call.name}`);
+                const run = TOOLS[call.name];
+                if (!run) throw new Error(`There is no tool called ${call.name}`);
+                const result = await run(args, turn, call.name);
+                if ('observe' in result) {
+                    observations.push({ call, response: result.observe });
+                    continue;
                 }
+                ended = true;
+                const say = result.say ?? { reply: args.reply, speech: args.speech };
+                if (say.reply) parts.push({ reply: say.reply, speech: devanagariOnly(say.speech) });
+                if (result.action) actions.push(result.action);
+                if (result.card !== undefined) card = result.card;
+                if (result.saved) saved = result.saved;
             } catch (err) {
                 if (err instanceof ApiError) throw err;
                 // Tell the model what was wrong; it corrects itself or asks the person
-                if (args.reply) replies.pop();
-                answers.push({ call, response: { error: err.message } });
+                observations.push({ call, response: { error: err.message } });
             }
         }
 
         // Only lookups and mistakes go back to the model; anything else ends the turn
-        const acted = card !== undefined || actions.length > 0 || saved;
-        if (acted || answers.length === 0) {
-            return { reply: replies.join(' ') || 'Done.', pending: card === undefined ? await keepPending() : card, actions, saved };
+        if (ended || observations.length === 0) {
+            return { ...wordsOf(parts), pending: card === undefined ? await keepPending() : card, actions, saved };
         }
-        request.contents.push({ role: 'user', parts: answers.map(({ call, response: result }) => ({ functionResponse: { id: call.id, name: call.name, response: result } })) });
+        request.contents.push({ role: 'user', parts: observations.map(({ call, response: result }) => ({ functionResponse: { id: call.id, name: call.name, response: result } })) });
     }
 
-    return { reply: 'Sorry, I got lost there — could you say that again more simply?', pending: await keepPending(), actions: [], saved: null };
+    return { reply: 'Sorry, I got lost there — could you say that again more simply?', speech: null, pending: await keepPending(), actions: [], saved: null };
 };
 
 // The names Gemini reads. A phone's .m4a must go as audio/m4a: sent as audio/mp4 it hung for 30 s (tried 2026-10-27).
