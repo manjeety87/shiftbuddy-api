@@ -8,16 +8,16 @@ const { findConflicts } = require('./conflict.service');
 const timesheetService = require('./timesheet.service');
 const { NOT_MISSED } = require('../constants/shifts');
 const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
-const { quickAnswer, languageOf, quickReplyText, quickReplySpeech, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, buildSystemPrompt, assistantTools } = require('../domain/assistant');
+const { quickAnswer, languageOf, quickReplyText, quickReplySpeech, localToDate, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, buildSystemPrompt, assistantTools } = require('../domain/assistant');
 const { jobName } = require('../domain/jobLabels');
 const { overlaps } = require('../domain/shifts');
 const { resolveFeatures } = require('../domain/features');
-const { autoBreakMinutes } = require('../domain/timesheet');
+const { autoBreakMinutes, clockOutForPaid } = require('../domain/timesheet');
 const { createShiftSchema, updateShiftSchema } = require('../validation/shift.validation');
 const { createJobSchema, updateJobSchema } = require('../validation/job.validation');
 
 const jobFields = { id: true, title: true, companyName: true, color: true };
-const shiftFields = { id: true, startTime: true, endTime: true, missedReason: true, job: { select: jobFields }, timeEntries: { select: { clockIn: true, clockOut: true, breakMinutes: true } } };
+const shiftFields = { id: true, startTime: true, endTime: true, missedReason: true, job: { select: jobFields }, timeEntries: { select: { id: true, clockIn: true, clockOut: true, breakMinutes: true } } };
 
 const GEMINI_MESSAGES = {
     label: 'Assistant',
@@ -26,7 +26,8 @@ const GEMINI_MESSAGES = {
     // A spoken reply can't wait for a second pass, or on a model that hangs: the next one
     // answers in a second or two. The person can always just ask again.
     secondPass: false,
-    timeoutMs: 9000,
+    // Long enough for a model with a full schedule in the prompt; seen timing out at 9 s (2026-11-04)
+    timeoutMs: 12000,
     quotaMessage: 'The assistant has used up its free requests for now — try again later, or use the app’s own buttons',
 };
 
@@ -97,6 +98,8 @@ const cardFor = async (userId, context, proposal, { checkClash = false, changeSa
         const upcomingShifts = await prisma.shift.count({ where: { userId, jobId: job.id, startTime: { gt: new Date() } } });
         return { ...proposal, preview: { ...jobCard(job), upcomingShifts } };
     }
+
+    if (proposal.type === 'logHours') return hoursCard(userId, context, proposal);
 
     if (proposal.type === 'addShifts') {
         const jobOf = (id) => context.jobs.find((job) => job.id === id);
@@ -172,12 +175,38 @@ const cardFor = async (userId, context, proposal, { checkClash = false, changeSa
         return { ...proposal, preview: shiftPreview };
     }
 
-    if (shift.missedReason) throw new Error('That shift is marked missed, so it can’t get hours — undo "missed" first');
-    if (shift.timeEntries.length > 0) throw new Error('That shift already has hours added; they can be changed in the shift’s details (open_shift)');
-    if (proposal.clockOut > new Date()) throw new Error('Hours can’t end in the future');
-    const breakMinutes = proposal.breakMinutes ?? autoBreakMinutes(proposal.clockIn, proposal.clockOut);
-    const workedMinutes = Math.round((proposal.clockOut - proposal.clockIn) / 60000);
-    return { ...proposal, preview: { ...shiftPreview, clockIn: proposal.clockIn, clockOut: proposal.clockOut, breakMinutes, paidMinutes: Math.max(0, workedMinutes - breakMinutes) } };
+    throw new Error(`No card for ${proposal.type}`);
+};
+
+/** Hours on several shifts: each new, or replacing what that shift has (the card shows both). */
+const hoursCard = async (userId, context, proposal) => {
+    if (new Set(proposal.entries.map((entry) => entry.shiftId)).size !== proposal.entries.length) throw new Error('Each shift once — put one entry per shift');
+    const now = new Date();
+    const entries = [];
+    const previews = [];
+    for (const entry of proposal.entries) {
+        const shift = await ownShift(userId, context, entry.shiftId);
+        if (!shift) throw new Error(`Unknown shiftId ${entry.shiftId} — use an id from SCHEDULE or find_shifts`);
+        if (shift.missedReason) throw new Error(`The shift ${shift.id} is marked missed, so it can’t get hours — undo "missed" first`);
+        if (entry.clockOut > now) throw new Error('Hours can’t end in the future');
+        const existing = shift.timeEntries[0] ?? null;
+        const breakMinutes = entry.breakMinutes ?? autoBreakMinutes(entry.clockIn, entry.clockOut);
+        const paid = Math.max(0, Math.round((entry.clockOut - entry.clockIn) / 60000) - breakMinutes);
+        entries.push({ shiftId: shift.id, entryId: existing?.id ?? null, clockIn: entry.clockIn, clockOut: entry.clockOut, breakMinutes });
+        previews.push({
+            ...jobCard(shift.job),
+            startTime: shift.startTime,
+            endTime: shift.endTime,
+            clockIn: entry.clockIn,
+            clockOut: entry.clockOut,
+            breakMinutes,
+            paidMinutes: paid,
+            before: existing
+                ? { clockIn: existing.clockIn, clockOut: existing.clockOut, breakMinutes: existing.breakMinutes, paidMinutes: existing.clockOut ? Math.max(0, Math.round((existing.clockOut - existing.clockIn) / 60000) - existing.breakMinutes) : null }
+                : null,
+        });
+    }
+    return { type: 'logHours', entries, preview: { entries: previews } };
 };
 
 /** Only the job details the model gave: an edit changes what was said and nothing else. */
@@ -204,6 +233,27 @@ const proposalFromCall = async (userId, call, context, timeZone) => {
         if (!args.shiftIds?.length) throw new Error('No shifts given');
         return { type: 'removeShifts', shiftIds: args.shiftIds };
     }
+    if (call.name === 'log_hours') {
+        if (!args.entries?.length) throw new Error('No hours given');
+        const entries = [];
+        for (const item of args.entries) {
+            const shift = await ownShift(userId, context, item.shiftId);
+            if (!shift) throw new Error(`Unknown shiftId ${item.shiftId} — use an id from SCHEDULE or find_shifts`);
+            // Hours are on the shift's own day, so "9 to 5:30" needs no date from the model
+            const day = DateTime.fromJSDate(shift.startTime, { zone: timeZone }).toISODate();
+            const clockIn = item.start ? localToDate(day, item.start, timeZone) : shift.startTime;
+            if (!clockIn) throw new Error(`Couldn’t read the clock-in ${item.start}; use HH:mm`);
+            if (item.paidMinutes) {
+                entries.push({ shiftId: shift.id, clockIn, ...clockOutForPaid(clockIn, item.paidMinutes, item.breakMinutes) });
+                continue;
+            }
+            if (!item.end) throw new Error('Give each entry an end time or paidMinutes');
+            const span = spanOn(day, DateTime.fromJSDate(clockIn, { zone: timeZone }).toFormat('HH:mm'), item.end, timeZone);
+            if (!span) throw new Error(`Couldn’t read the clock-out ${item.end}; use HH:mm`);
+            entries.push({ shiftId: shift.id, clockIn: span.startTime, clockOut: span.endTime, ...(item.breakMinutes != null && { breakMinutes: item.breakMinutes }) });
+        }
+        return { type: 'logHours', entries };
+    }
     if (call.name === 'add_job') return { type: 'addJob', job: jobDetailsFrom(args) };
     if (call.name === 'edit_job') return { type: 'editJob', jobId: args.jobId, changes: jobDetailsFrom(args) };
     if (call.name === 'delete_job') return { type: 'deleteJob', jobId: args.jobId };
@@ -212,20 +262,13 @@ const proposalFromCall = async (userId, call, context, timeZone) => {
     if (!shift) throw new Error(`Unknown shiftId ${args.shiftId} — use an id from SCHEDULE or find_shifts`);
     const own = (date) => DateTime.fromJSDate(date, { zone: timeZone });
 
-    if (call.name === 'edit_shift') {
-        // Only what changed is given; the rest is the shift as it is
-        const day = args.date ?? own(shift.startTime).toISODate();
-        const start = args.start ?? own(shift.startTime).toFormat('HH:mm');
-        const end = args.end ?? own(shift.endTime).toFormat('HH:mm');
-        const span = spanOn(day, start, end, timeZone);
-        if (!span) throw new Error(`Couldn’t read ${day} ${start}–${end}; use YYYY-MM-DD and HH:mm`);
-        return { type: 'editShift', shiftId: shift.id, jobId: args.jobId ?? shift.job.id, ...span };
-    }
-
-    // Hours are on the shift's own day, so "9 to 5:30" needs no date from the model
-    const span = spanOn(own(shift.startTime).toISODate(), args.start, args.end, timeZone);
-    if (!span) throw new Error(`Couldn’t read ${args.start}–${args.end}; use HH:mm`);
-    return { type: 'logHours', shiftId: args.shiftId, clockIn: span.startTime, clockOut: span.endTime, ...(args.breakMinutes != null && { breakMinutes: args.breakMinutes }) };
+    // edit_shift: only what changed is given; the rest is the shift as it is
+    const day = args.date ?? own(shift.startTime).toISODate();
+    const start = args.start ?? own(shift.startTime).toFormat('HH:mm');
+    const end = args.end ?? own(shift.endTime).toFormat('HH:mm');
+    const span = spanOn(day, start, end, timeZone);
+    if (!span) throw new Error(`Couldn’t read ${day} ${start}–${end}; use YYYY-MM-DD and HH:mm`);
+    return { type: 'editShift', shiftId: shift.id, jobId: args.jobId ?? shift.job.id, ...span };
 };
 
 /** find_shifts: their shifts between two days, as the same lines the prompt uses. */
@@ -329,9 +372,28 @@ const applyProposal = async (userId, proposal) => {
         await shiftService.markMissed(userId, proposal.shiftId, { reason: proposal.reason });
         return { type: 'markMissed', count: 1, shiftIds: [proposal.shiftId], skipped: 0 };
     }
-    const entry = await timesheetService.createEntry(userId, { shiftId: proposal.shiftId, clockIn: proposal.clockIn, clockOut: proposal.clockOut, breakMinutes: proposal.breakMinutes });
-    // The entry's id lets the app offer Undo
-    return { type: 'logHours', count: 1, shiftIds: [proposal.shiftId], skipped: 0, entryId: entry.id };
+    if (proposal.type === 'logHours') {
+        const created = [];
+        const restore = [];
+        for (const entry of proposal.entries) {
+            const hours = { clockIn: entry.clockIn, clockOut: entry.clockOut, breakMinutes: entry.breakMinutes ?? autoBreakMinutes(entry.clockIn, entry.clockOut) };
+            if (entry.entryId) {
+                const before = await timesheetService.getEntry(userId, entry.entryId);
+                await timesheetService.updateEntry(userId, entry.entryId, hours);
+                restore.push({ entryId: entry.entryId, clockIn: before.clockIn, clockOut: before.clockOut, breakMinutes: before.breakMinutes });
+            } else {
+                created.push((await timesheetService.createEntry(userId, { shiftId: entry.shiftId, ...hours })).id);
+            }
+        }
+        const shiftIds = proposal.entries.map((entry) => entry.shiftId);
+        return { type: 'logHours', count: shiftIds.length, shiftIds, skipped: 0, undo: { type: 'undoHours', remove: created, restore } };
+    }
+    if (proposal.type === 'undoHours') {
+        for (const entryId of proposal.remove) await timesheetService.deleteEntry(userId, entryId);
+        for (const { entryId, ...hours } of proposal.restore) await timesheetService.updateEntry(userId, entryId, hours);
+        return { type: 'undoHours', count: proposal.remove.length + proposal.restore.length, shiftIds: [], skipped: 0 };
+    }
+    throw new ApiError(400, `Unknown change ${proposal.type}`);
 };
 
 /** The card's Save button: no model call, just the save. */
@@ -348,38 +410,21 @@ const confirmByVoice = async (userId, context, pending, replyFor) => {
     }
 };
 
-// Deleting waits for a yes; so does a save the app had to warn about (a clash is a decision)
-const needsYes = (card) => card.type === 'removeShifts' || card.type === 'deleteJob' || card.allowOverlap === true;
-
-/** A save started by the model: a refusal (a clash that appeared, bad input) goes back to it as an error to fix or say. */
-const saveForModel = async (userId, card) => {
-    try {
-        return await applyProposal(userId, card);
-    } catch (err) {
-        if (err instanceof ApiError && err.statusCode < 500) throw new Error(err.message);
-        throw err;
-    }
-};
-
-/** add_shifts … delete_job: make the change, or put it on a card when it needs a yes. */
+/** add_shifts … delete_job: put the change on a card. Nothing is saved until a yes. */
 const change = async (args, turn, name) => {
     const proposal = await proposalFromCall(turn.userId, { name, args }, turn.context, turn.timeZone);
     const card = await cardFor(turn.userId, turn.context, proposal, { checkClash: name === 'add_shifts' && !args.extraShift, changeSameJob: name === 'add_shifts' });
     // The model asked to add; code made it a change, so the model's words don't fit
     const becameChange = name === 'add_shifts' && card.type === 'editShift';
-    if (needsYes(card)) {
-        const clash = card.allowOverlap && card.preview.overlaps[0];
-        const say = clash ? clashText(turn.message, clash, turn.timeZone) : becameChange ? changeText(turn.message, card.preview.after, turn.timeZone, { done: false }) : undefined;
-        return { card, say };
-    }
-    const saved = await saveForModel(turn.userId, card);
-    return { saved, say: becameChange ? changeText(turn.message, card.preview.after, turn.timeZone, { done: true }) : undefined };
+    const clash = card.allowOverlap && card.preview.overlaps[0];
+    const say = clash ? clashText(turn.message, clash, turn.timeZone) : becameChange ? changeText(turn.message, card.preview.after, turn.timeZone) : undefined;
+    return { card, say };
 };
 
 /**
  * Tool name → what it does, like the `available_tools` map of a plain agent loop.
  * `observe` goes back to the model (a lookup, a mistake); anything else ends the turn:
- * a `card` waiting for a yes, something `saved`, an `action` for the app, or words to `say`.
+ * a `card` waiting for a yes, something `saved` (confirm_pending), an `action` for the app, or words to `say`.
  */
 const TOOLS = {
     find_shifts: async (args, turn) => ({ observe: await findShifts(turn.userId, turn.context, args, turn.timeZone, turn.now) }),
@@ -412,11 +457,17 @@ const TOOLS = {
 // The model sometimes copies the Roman reply into speech; that isn't a copy a Hindi voice can read
 const devanagariOnly = (speech) => (speech && languageOf(speech) === 'hindi' ? speech : null);
 
-/** The turn's words: the reply, and the Devanagari copy only when every part has one (else the voice reads the reply). */
-const wordsOf = (parts) => ({
-    reply: parts.map((part) => part.reply).join(' ') || 'Done.',
-    speech: parts.length > 0 && parts.every((part) => part.speech) ? parts.map((part) => part.speech).join(' ') : null,
-});
+/**
+ * The turn's words: the reply, and the Devanagari copy only when every part has one
+ * (else the voice reads the reply). Two tool calls with the same reply say it once.
+ */
+const wordsOf = (allParts) => {
+    const parts = allParts.filter((part, index) => allParts.findIndex((other) => other.reply === part.reply) === index);
+    return {
+        reply: parts.map((part) => part.reply).join(' ') || 'Done.',
+        speech: parts.length > 0 && parts.every((part) => part.speech) ? parts.map((part) => part.speech).join(' ') : null,
+    };
+};
 
 /**
  * One turn of the conversation. Answers with what to say (`speech`: how a Hindi
@@ -531,7 +582,8 @@ const transcribe = async (audio, mimeType) => {
                 contents: [{ role: 'user', parts: [{ text: TRANSCRIBE_PROMPT }, { inlineData: { data: audio.toString('base64'), mimeType: GEMINI_AUDIO_TYPE[mimeType] ?? mimeType } }] }],
                 config: { responseMimeType: 'application/json', responseSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, temperature: 0, thinkingConfig: { thinkingLevel: 'low' } },
             },
-            { ...GEMINI_MESSAGES, label: 'Assistant voice' }
+            // Audio takes longer than text: a few seconds of speech timed out at 9 s
+            { ...GEMINI_MESSAGES, label: 'Assistant voice', timeoutMs: 20000 }
         );
     } catch (err) {
         // A recording Gemini can't read (a tap with no sound, a broken file) is "didn't catch that", not a failure;

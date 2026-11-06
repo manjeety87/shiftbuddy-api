@@ -28,6 +28,16 @@ const minutesBetween = (start, end) => Math.round((end.getTime() - start.getTime
 /** The unpaid break to assume for a stretch of work: 30 minutes once it's longer than 5 hours. */
 const autoBreakMinutes = (clockIn, clockOut) => (minutesBetween(clockIn, clockOut) > BREAK_AFTER_MINUTES ? BREAK_MINUTES : 0);
 
+/**
+ * "I worked 8 hours 12 minutes" instead of times: the clock-out that pays exactly that
+ * from `clockIn`, with the break the timesheet would take for it (or the one they said).
+ * 8 h 12 min paid from 9:00 is 17:42 — the 30 min break comes on top, not out of it.
+ */
+const clockOutForPaid = (clockIn, wantedPaidMinutes, breakMinutes) => {
+    const unpaidBreak = breakMinutes ?? (wantedPaidMinutes > BREAK_AFTER_MINUTES ? BREAK_MINUTES : 0);
+    return { clockOut: new Date(clockIn.getTime() + (wantedPaidMinutes + unpaidBreak) * MINUTE_MS), breakMinutes: unpaidBreak };
+};
+
 /** When a shift's clock can be started: from 10 minutes before it begins until it ends. */
 const clockInWindow = (shift) => ({
     opensAt: new Date(shift.startTime.getTime() - CLOCK_IN_EARLY_MINUTES * MINUTE_MS),
@@ -168,4 +178,4 @@ const scheduledEntryFor = (shift) => {
     return { clockIn: shift.startTime, clockOut: shift.endTime, breakMinutes, paidMinutes: paidMinutes({ clockIn: shift.startTime, clockOut: shift.endTime, breakMinutes }) };
 };
 
-module.exports = { UNLOGGED_DAYS, scheduledEntryFor, CLOCK_IN_EARLY_MINUTES, SUMMARY_RANGES, clockInWindow, weekOn, summaryRangeOn, estimatedPayOf, summarizeAcrossJobs, BREAK_AFTER_MINUTES, BREAK_MINUTES, autoBreakMinutes, paidMinutes, payPeriodOn, summarizeEntries };
+module.exports = { UNLOGGED_DAYS, scheduledEntryFor, CLOCK_IN_EARLY_MINUTES, SUMMARY_RANGES, clockInWindow, weekOn, summaryRangeOn, estimatedPayOf, summarizeAcrossJobs, BREAK_AFTER_MINUTES, BREAK_MINUTES, autoBreakMinutes, clockOutForPaid, paidMinutes, payPeriodOn, summarizeEntries };

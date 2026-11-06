@@ -128,11 +128,10 @@ test('a new shift on top of one at the same job is a change of that shift; anoth
     assert.equal(sameJobShiftToChange([later], []), null);
 });
 
-test('words for a save code changed or held back: the language it was said in, a Devanagari copy for Hinglish', () => {
+test('words for an add code turned into a change, or a clash: the language it was said in, a Devanagari copy for Hinglish', () => {
     const after = { jobName: 'Boathouse', startTime: at('2026-10-29T14:00'), endTime: at('2026-10-29T22:30') };
-    assert.deepEqual(changeText('Thursday is now 2 to 10:30', after, ZONE, { done: true }), { reply: 'Done, your Boathouse shift is now 2 PM–10:30 PM.', speech: null });
-    assert.deepEqual(changeText('Thursday is now 2 to 10:30', after, ZONE, { done: false }), { reply: 'That’s your Boathouse shift — change it to 2 PM–10:30 PM?', speech: null });
-    assert.deepEqual(changeText('thursday ko 2 se 10:30 hai bhai', after, ZONE, { done: true }), { reply: 'Ho gaya, Boathouse wali shift ab 2 PM–10:30 PM hai.', speech: 'हो गया, Boathouse वाली शिफ्ट अब 2 PM–10:30 PM है।' });
+    assert.deepEqual(changeText('Thursday is now 2 to 10:30', after, ZONE), { reply: 'That’s your Boathouse shift — change it to 2 PM–10:30 PM?', speech: null });
+    assert.deepEqual(changeText('thursday ko 2 se 10:30 hai bhai', after, ZONE), { reply: 'Boathouse wali shift ko 2 PM–10:30 PM kar du?', speech: 'Boathouse वाली शिफ्ट 2 PM–10:30 PM कर दूँ?' });
     assert.equal(clashText('शिफ्ट जोड़ दो', after, ZONE).speech, null);
     assert.match(clashText('shift add kardo', after, ZONE).reply, /clash ho rahi hai/);
 });
@@ -148,10 +147,12 @@ test('a new job gets the first job colour none of theirs has', () => {
     assert.equal(nextJobColour([{ color: '#6b8f71' }]), '#B85C4E');
 });
 
-test('tools: only removing shifts and deleting a job wait for a yes; every tool can carry speech', () => {
+test('tools: every change shows a card before it saves; every tool can carry speech', () => {
     const tools = assistantTools({ timesheet: true });
     for (const name of ['add_job', 'edit_job', 'delete_job', 'find_conflicts', 'answer']) assert.ok(tools.some((item) => item.name === name), name);
-    const waits = tools.filter((item) => /waits for a yes/.test(item.description)).map((item) => item.name);
-    assert.deepEqual(waits, ['remove_shifts', 'delete_job']);
+    const changes = ['add_shifts', 'edit_shift', 'remove_shifts', 'mark_missed', 'log_hours', 'add_job', 'edit_job', 'delete_job'];
+    for (const name of changes) assert.match(tools.find((item) => item.name === name).description, /Shows a card/, name);
+    // Hours for several days in one card; a length of time is paid time
+    assert.ok(tools.find((item) => item.name === 'log_hours').parametersJsonSchema.properties.entries.items.properties.paidMinutes);
     for (const item of tools.filter((entry) => entry.parametersJsonSchema.properties.reply)) assert.ok(item.parametersJsonSchema.properties.speech, item.name);
 });

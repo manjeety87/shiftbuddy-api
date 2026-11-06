@@ -380,7 +380,7 @@ test('weather advice: a much colder trip home is called out with the time', () =
     assert.equal(tripHome.title, 'Colder on the way home (9° at 5:00 PM)');
 });
 
-const { autoBreakMinutes, paidMinutes, payPeriodOn, summarizeEntries } = require('../src/domain/timesheet');
+const { autoBreakMinutes, clockOutForPaid, paidMinutes, payPeriodOn, summarizeEntries } = require('../src/domain/timesheet');
 const period = (dateISO, job, offset) => {
     const p = payPeriodOn(at(dateISO), job, TORONTO, offset);
     return [p.start.toISODate(), p.end.minus({ days: 1 }).toISODate(), p.payday?.toISODate() ?? null];
@@ -422,4 +422,13 @@ test('timesheet: 30 unpaid minutes once past 5 hours; paid time and pay add up',
     assert.deepEqual(entries.map((e) => e.paidMinutes), [450, 240, null]);
     assert.deepEqual(totals, { entryCount: 2, paidMinutes: 690, breakMinutes: 30, grossPay: 207 });
     assert.equal(summarizeEntries([], null).totals.grossPay, null);
+});
+
+test('timesheet: "I worked 8 h 12 min" is paid time — the break comes on top', () => {
+    // The case the user hit (2026-11-05): 9:00 start, 8 h 12 min paid → out at 17:42, not 17:12
+    assert.deepEqual(clockOutForPaid(at('2026-11-03T09:00'), 492), { clockOut: at('2026-11-03T17:42'), breakMinutes: 30 });
+    // Up to 5 h has no break
+    assert.deepEqual(clockOutForPaid(at('2026-11-03T09:00'), 300), { clockOut: at('2026-11-03T14:00'), breakMinutes: 0 });
+    // A break they said wins
+    assert.deepEqual(clockOutForPaid(at('2026-11-03T09:00'), 480, 45), { clockOut: at('2026-11-03T17:45'), breakMinutes: 45 });
 });

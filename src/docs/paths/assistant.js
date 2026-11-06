@@ -2,7 +2,7 @@ const v = require('../../validation/assistant.validation');
 const { op, ok, errors, error } = require('../helpers');
 
 const tag = 'Assistant';
-const PROPOSAL_TYPES = ['addShifts', 'editShift', 'removeShifts', 'markMissed', 'logHours', 'addJob', 'editJob', 'deleteJob', 'restoreJob'];
+const PROPOSAL_TYPES = ['addShifts', 'editShift', 'removeShifts', 'markMissed', 'logHours', 'addJob', 'editJob', 'deleteJob', 'restoreJob', 'undoHours'];
 
 const saved = {
     type: 'object',

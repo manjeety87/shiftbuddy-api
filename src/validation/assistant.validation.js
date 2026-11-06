@@ -49,12 +49,29 @@ const proposalSchema = z.discriminatedUnion('type', [
         jobId: uuid('Invalid job ID'),
         shifts: z.array(z.object({ startTime: z.coerce.date(), endTime: z.coerce.date(), notes: z.string().max(500).nullable().optional() })).max(500),
     }),
+    // Hours on one or more shifts; entryId when it replaces the hours that shift has
     z.object({
         type: z.literal('logHours'),
-        shiftId: uuid('Invalid shift ID'),
-        clockIn: z.coerce.date(),
-        clockOut: z.coerce.date(),
-        breakMinutes: z.number().int().min(0).max(240).optional(),
+        entries: z
+            .array(
+                z.object({
+                    shiftId: uuid('Invalid shift ID'),
+                    entryId: uuid('Invalid entry ID').nullable().optional(),
+                    clockIn: z.coerce.date(),
+                    clockOut: z.coerce.date(),
+                    breakMinutes: z.number().int().min(0).max(240).optional(),
+                })
+            )
+            .min(1)
+            .max(MAX_PROPOSED_SHIFTS),
+    }),
+    // Only as Undo of logHours: delete the entries it made, put back the ones it changed
+    z.object({
+        type: z.literal('undoHours'),
+        remove: z.array(uuid('Invalid entry ID')).max(MAX_PROPOSED_SHIFTS),
+        restore: z
+            .array(z.object({ entryId: uuid('Invalid entry ID'), clockIn: z.coerce.date(), clockOut: z.coerce.date().nullable(), breakMinutes: z.number().int().min(0).max(240) }))
+            .max(MAX_PROPOSED_SHIFTS),
     }),
 ]);
 
