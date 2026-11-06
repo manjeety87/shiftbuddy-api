@@ -71,6 +71,25 @@ module.exports = {
             responses: { ...ok('The reply', turnReply), ...turnErrors },
         }),
     },
+    '/assistant/transcribe': {
+        post: op({
+            tag,
+            summary: 'Write down a recording',
+            description:
+                'Only the words (Hinglish in Roman letters), for the web app: it shows them, then sends them to /assistant/messages. Two short ' +
+                'requests instead of one long one, so a slow transcription can never hide a saved card. The recording is not stored. Shares the 20 turns/min.',
+            multipart: {
+                type: 'object',
+                required: ['audio'],
+                properties: { audio: { type: 'string', format: 'binary', description: 'WAV, WEBM, OGG, M4A/AAC or MP3, up to 3 MB' } },
+            },
+            responses: {
+                ...ok('What was heard', { type: 'object', properties: { heard: { type: 'string', description: 'Empty when nothing clear was said' } } }),
+                ...error(400, 'No recording, or not an audio type'),
+                ...turnErrors,
+            },
+        }),
+    },
     '/assistant/voice': {
         post: op({
             tag,

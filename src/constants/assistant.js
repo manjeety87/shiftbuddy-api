@@ -8,6 +8,13 @@ const MAX_ASSISTANT_HISTORY = 12;
 const MAX_HISTORY_TEXT = 1000;
 /** Model calls in one turn: look something up, then act. A loop past this is a confused model. */
 const MAX_ASSISTANT_STEPS = 4;
+/**
+ * The most one turn may spend waiting on Gemini, all steps and models together, and the
+ * same for writing down a recording. The web app goes through a proxy that gives up
+ * around 30 s; a turn that saved after that showed "Couldn't reach" (2026-11-05).
+ */
+const ASSISTANT_TURN_BUDGET_MS = 24000;
+const TRANSCRIBE_BUDGET_MS = 20000;
 /** The schedule the model sees without asking: the week before (hours to add) and two after. */
 const CONTEXT_DAYS_BEFORE = 7;
 const CONTEXT_DAYS_AFTER = 14;
@@ -27,6 +34,8 @@ const ASSISTANT_PANELS = ['newShift', 'newJob', 'addHours', 'paySummary', 'scan'
 const JOB_COLOURS = ['#6B8F71', '#B85C4E', '#C99A3A', '#5B8A9A', '#9B7EBD', '#C77B8E', '#7A9E7E'];
 
 module.exports = {
+    ASSISTANT_TURN_BUDGET_MS,
+    TRANSCRIBE_BUDGET_MS,
     JOB_COLOURS,
     MAX_ASSISTANT_MESSAGE,
     MAX_ASSISTANT_HISTORY,

@@ -14,6 +14,8 @@ const BUSY_STATUS = new Set([429, 500, 503, 504]);
 const GONE_STATUS = new Set([404]); // model retired for this key — just skip it
 const SECOND_PASS_DELAY_MS = 3000;
 const SECOND_PASS_MODELS = 2; // after a short pause, retry the best two once more
+// With a deadline, a model isn't started with less than this left: it couldn't answer in time
+const MIN_ATTEMPT_MS = 2000;
 
 // A model that hangs (seen: 24 s, then 504) is as good as busy — and so is our own timeout
 const isBusy = (err) => BUSY_STATUS.has(err.status) || /UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|high demand|overloaded|aborted|timed? ?out/i.test(err.message || '');
@@ -24,9 +26,11 @@ const isBusy = (err) => BUSY_STATUS.has(err.status) || /UNAVAILABLE|RESOURCE_EXH
  * messages are what the user sees when every model is busy (or, `quotaMessage`, out
  * of quota for the day), or one fails outright.
  * `secondPass: false` skips the pause-and-retry and `timeoutMs` gives up on a slow
- * model early (a voice reply can't wait that long).
+ * model early (a voice reply can't wait that long). `deadline` (a Date.now() time)
+ * bounds all the models together: five models × the timeout would outlast the app's
+ * own wait, and a reply that arrives after the app gave up is a save it never shows.
  */
-const generateWithFallback = async (request, { label, busyMessage, failMessage, quotaMessage = busyMessage, secondPass = true, timeoutMs }) => {
+const generateWithFallback = async (request, { label, busyMessage, failMessage, quotaMessage = busyMessage, secondPass = true, timeoutMs, deadline }) => {
     const passes = secondPass ? [GEMINI_MODELS, GEMINI_MODELS.slice(0, SECOND_PASS_MODELS)] : [GEMINI_MODELS];
     let sawBusy = false;
     // Every model out of quota is a different message from "busy for a moment": waiting a minute won't help
@@ -38,9 +42,16 @@ const generateWithFallback = async (request, { label, busyMessage, failMessage, 
             await new Promise((resolve) => setTimeout(resolve, SECOND_PASS_DELAY_MS));
         }
         for (const model of passes[pass]) {
+            const left = deadline ? deadline - Date.now() : Infinity;
+            if (left < MIN_ATTEMPT_MS) {
+                sawBusy = true;
+                onlyQuota = false;
+                break;
+            }
             try {
                 // Our own signal, not httpOptions.timeout: Gemini refuses a deadline under 10 s
-                const config = timeoutMs ? { ...request.config, abortSignal: AbortSignal.timeout(timeoutMs) } : request.config;
+                const wait = Math.min(timeoutMs ?? Infinity, left);
+                const config = Number.isFinite(wait) ? { ...request.config, abortSignal: AbortSignal.timeout(wait) } : request.config;
                 const response = await ai.models.generateContent({ ...request, config, model });
                 if (model !== GEMINI_MODELS[0] || pass > 0) console.info(`${label} served by ${model}`);
                 return response;

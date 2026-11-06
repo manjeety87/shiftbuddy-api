@@ -4,7 +4,7 @@ process.env.TZ = 'America/Toronto';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { DateTime } = require('luxon');
-const { quickAnswer, languageOf, quickReplyText, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, quickReplySpeech, buildSystemPrompt, assistantTools } = require('../src/domain/assistant');
+const { quickAnswer, saysYes, languageOf, quickReplyText, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, quickReplySpeech, buildSystemPrompt, assistantTools } = require('../src/domain/assistant');
 const { assistantMessageSchema } = require('../src/validation/assistant.validation');
 
 const ZONE = 'America/Toronto';
@@ -155,4 +155,18 @@ test('tools: every change shows a card before it saves; every tool can carry spe
     // Hours for several days in one card; a length of time is paid time
     assert.ok(tools.find((item) => item.name === 'log_hours').parametersJsonSchema.properties.entries.items.properties.paidMinutes);
     for (const item of tools.filter((entry) => entry.parametersJsonSchema.properties.reply)) assert.ok(item.parametersJsonSchema.properties.speech, item.name);
+});
+
+test('a card is confirmed only on a yes, and "nothing new" is said as that', () => {
+    // The 2026-11-06 slip: a thank-you and a question were taken as a yes
+    assert.equal(saysYes('Thanks! How many hours is that in total?'), false);
+    assert.equal(saysYes('Yes, please add it.'), true);
+    assert.equal(saysYes('haan add kardo bhai'), true);
+    assert.equal(saysYes('nahi, Friday ko'), false);
+    assert.equal(quickReplyText('yes', { type: 'addShifts', count: 0 }), 'Those shifts are already on your schedule, so nothing was added.');
+});
+
+test('prompt: this week and next as dates, with the days already over', () => {
+    const prompt = buildSystemPrompt({ name: 'Sam', now: at('2026-11-06T12:00'), timeZone: ZONE, page: 'home', jobs: [boathouse], shifts: [], pendingText: 'none', features: { timesheet: true } });
+    assert.match(prompt, /This week: Mon 2 Nov – Sun 8 Nov \(Monday–Thursday already over\)\. Next week: Mon 9 Nov – Sun 15 Nov\./);
 });

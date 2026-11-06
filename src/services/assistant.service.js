@@ -7,8 +7,8 @@ const jobService = require('./job.service');
 const { findConflicts } = require('./conflict.service');
 const timesheetService = require('./timesheet.service');
 const { NOT_MISSED } = require('../constants/shifts');
-const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
-const { quickAnswer, languageOf, quickReplyText, quickReplySpeech, localToDate, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, buildSystemPrompt, assistantTools } = require('../domain/assistant');
+const { ASSISTANT_TURN_BUDGET_MS, TRANSCRIBE_BUDGET_MS, MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
+const { quickAnswer, saysYes, languageOf, quickReplyText, quickReplySpeech, localToDate, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, buildSystemPrompt, assistantTools } = require('../domain/assistant');
 const { jobName } = require('../domain/jobLabels');
 const { overlaps } = require('../domain/shifts');
 const { resolveFeatures } = require('../domain/features');
@@ -439,9 +439,13 @@ const TOOLS = {
     delete_job: change,
     confirm_pending: async (args, turn) => {
         if (!turn.pending) throw new Error('Nothing is waiting to be confirmed');
+        if (!saysYes(turn.message)) throw new Error('They did not say yes — answer what they said, and propose the change again only if they still want it');
         const outcome = await confirmByVoice(turn.userId, turn.context, turn.pending, () => args.reply);
         // Not saved: the reason is said instead of the model's "done"
-        return { card: outcome.pending, saved: outcome.saved, say: outcome.saved ? undefined : { reply: outcome.reply, speech: null } };
+        if (!outcome.saved) return { card: outcome.pending, say: { reply: outcome.reply, speech: null } };
+        // Nothing new (all of them were there already): said as that, not as the model's "added"
+        const nothingNew = outcome.saved.type === 'addShifts' && outcome.saved.count === 0;
+        return { card: null, saved: outcome.saved, say: nothingNew ? { reply: quickReplyText(turn.message, outcome.saved), speech: quickReplySpeech(turn.message, outcome.saved) } : undefined };
     },
     cancel_pending: async () => ({ card: null }),
     open_page: async (args) => ({ action: { type: 'openPage', page: args.page } }),
@@ -451,7 +455,8 @@ const TOOLS = {
     },
     open_panel: async (args) => ({ action: { type: 'openPanel', panel: args.panel } }),
     close_panels: async () => ({ action: { type: 'closePanels' } }),
-    answer: async () => ({}),
+    // A question about the waiting card keeps it (checked again: it may no longer fit); anything else lets it go
+    answer: async (args, turn) => (args.keepCard && turn.pending ? { card: await cardFor(turn.userId, turn.context, turn.pending).catch(() => null) } : {}),
 };
 
 // The model sometimes copies the Roman reply into speech; that isn't a copy a Hindi voice can read
@@ -515,11 +520,13 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
         },
     };
 
+    // Every step and every model of this turn shares one budget
+    const deadline = Date.now() + ASSISTANT_TURN_BUDGET_MS;
     for (let step = 0; step < MAX_ASSISTANT_STEPS; step++) {
-        const response = await generateWithFallback(request, GEMINI_MESSAGES);
+        const response = await generateWithFallback(request, { ...GEMINI_MESSAGES, deadline });
         const calls = response.functionCalls ?? [];
         if (calls.length === 0) {
-            return { reply: response.text?.trim() || 'Sorry, I didn’t catch that — say it again?', speech: null, pending: await keepPending(), actions: [], saved: null };
+            return { reply: response.text?.trim() || 'Sorry, I didn’t catch that — say it again?', speech: null, pending: null, actions: [], saved: null };
         }
 
         // The model's own turn goes back as it came (newer models sign their tool calls)
@@ -556,7 +563,8 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
 
         // Only lookups and mistakes go back to the model; anything else ends the turn
         if (ended || observations.length === 0) {
-            return { ...wordsOf(parts), pending: card === undefined ? await keepPending() : card, actions, saved };
+            // A card that wasn't proposed again goes: an old card never sits under a new answer
+            return { ...wordsOf(parts), pending: card ?? null, actions, saved };
         }
         request.contents.push({ role: 'user', parts: observations.map(({ call, response: result }) => ({ functionResponse: { id: call.id, name: call.name, response: result } })) });
     }
@@ -583,7 +591,7 @@ const transcribe = async (audio, mimeType) => {
                 config: { responseMimeType: 'application/json', responseSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, temperature: 0, thinkingConfig: { thinkingLevel: 'low' } },
             },
             // Audio takes longer than text: a few seconds of speech timed out at 9 s
-            { ...GEMINI_MESSAGES, label: 'Assistant voice', timeoutMs: 20000 }
+            { ...GEMINI_MESSAGES, label: 'Assistant voice', timeoutMs: 15000, deadline: Date.now() + TRANSCRIBE_BUDGET_MS }
         );
     } catch (err) {
         // A recording Gemini can't read (a tap with no sound, a broken file) is "didn't catch that", not a failure;
@@ -598,6 +606,9 @@ const transcribe = async (audio, mimeType) => {
     }
 };
 
+/** POST /assistant/transcribe: only the words, so the web app can show them and then send them as a normal turn. */
+const transcribeRecording = async ({ audio, mimeType }) => ({ heard: (await transcribe(audio, mimeType)).slice(0, MAX_ASSISTANT_MESSAGE) });
+
 /**
  * A spoken turn from the phone app, which can't turn speech into text itself (Expo Go
  * has no speech recognition). `heard` is what was understood; when it's empty nothing
@@ -609,4 +620,4 @@ const respondToVoice = async (userId, { audio, mimeType, ...turn }) => {
     return { heard, ...(await respond(userId, { ...turn, message: heard })) };
 };
 
-module.exports = { respond, respondToVoice, confirmProposal };
+module.exports = { respond, respondToVoice, transcribeRecording, confirmProposal };

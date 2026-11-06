@@ -49,6 +49,15 @@ const quickAnswer = (message) => {
     return yes ? 'yes' : 'no';
 };
 
+/**
+ * Whether a message has a yes in it at all. The model may only confirm a card on one:
+ * it once took "Thanks! How many hours is that?" as a yes and saved (2026-11-06).
+ */
+const saysYes = (message) => {
+    const words = wordsOf(message);
+    return words.some((word) => YES_WORDS.has(word)) && !words.some((word) => NO_WORDS.has(word));
+};
+
 // Roman-letter Hindi that marks a message as Hinglish rather than English
 const HINGLISH_WORDS = new Set(['haan', 'haa', 'han', 'haanji', 'hanji', 'ji', 'theek', 'thik', 'sahi', 'bilkul', 'kardo', 'karo', 'kar', 'krdo', 'chalo', 'achha', 'acha', 'accha', 'ekdum', 'nahi', 'nahin', 'nai', 'mat', 'rehne', 'galat', 'chhodo', 'chodo', 'hai', 'bhai', 'yaar', 'toh', 'dena', 'bas', 'abhi']);
 
@@ -60,7 +69,7 @@ const languageOf = (message) => {
 
 const SAID = {
     english: {
-        addShifts: (n) => (n === 1 ? 'Done, the shift is added.' : `Done, ${n} shifts added.`),
+        addShifts: (n) => (n === 0 ? 'Those shifts are already on your schedule, so nothing was added.' : n === 1 ? 'Done, the shift is added.' : `Done, ${n} shifts added.`),
         editShift: () => 'Done, the shift is changed.',
         removeShifts: (n) => (n === 1 ? 'Done, the shift is removed.' : `Done, ${n} shifts removed.`),
         deleteJob: () => 'Done, the job is deleted.',
@@ -69,7 +78,7 @@ const SAID = {
         cancelled: 'Okay, I won’t save it.',
     },
     hinglish: {
-        addShifts: (n) => (n === 1 ? 'Ho gaya, shift add kar di.' : `Ho gaya, ${n} shifts add kar di.`),
+        addShifts: (n) => (n === 0 ? 'Ye shifts pehle se aapke schedule mein hain, kuch add nahi kiya.' : n === 1 ? 'Ho gaya, shift add kar di.' : `Ho gaya, ${n} shifts add kar di.`),
         editShift: () => 'Ho gaya, shift badal di.',
         removeShifts: (n) => (n === 1 ? 'Ho gaya, shift hata di.' : `Ho gaya, ${n} shifts hata di.`),
         deleteJob: () => 'Ho gaya, job delete kar di.',
@@ -78,7 +87,7 @@ const SAID = {
         cancelled: 'Theek hai, save nahi kiya.',
     },
     hindi: {
-        addShifts: (n) => (n === 1 ? 'हो गया, शिफ्ट ऐड कर दी।' : `हो गया, ${n} शिफ्ट ऐड कर दीं।`),
+        addShifts: (n) => (n === 0 ? 'ये शिफ्ट पहले से आपके शेड्यूल में हैं, कुछ ऐड नहीं किया।' : n === 1 ? 'हो गया, शिफ्ट ऐड कर दी।' : `हो गया, ${n} शिफ्ट ऐड कर दीं।`),
         editShift: () => 'हो गया, शिफ्ट बदल दी।',
         removeShifts: (n) => (n === 1 ? 'हो गया, शिफ्ट हटा दी।' : `हो गया, ${n} शिफ्ट हटा दीं।`),
         deleteJob: () => 'हो गया, जॉब डिलीट कर दी।',
@@ -205,6 +214,14 @@ const nextJobColour = (jobs) => {
     return JOB_COLOURS.find((colour) => !used.has(colour)) ?? JOB_COLOURS[jobs.length % JOB_COLOURS.length];
 };
 
+/** This week and the next as dates, and which days of this one are over — the model misjudged both. */
+const weekLine = (today) => {
+    const monday = today.startOf('week');
+    const span = (start) => `${start.toFormat('ccc d LLL')} – ${start.plus({ days: 6 }).toFormat('ccc d LLL')}`;
+    const over = today.weekday > 1 ? ` (${monday.toFormat('cccc')}${today.weekday > 2 ? `–${today.minus({ days: 1 }).toFormat('cccc')}` : ''} already over)` : '';
+    return `This week: ${span(monday)}${over}. Next week: ${span(monday.plus({ weeks: 1 }))}.`;
+};
+
 /**
  * Everything the model knows about this person and this moment. The schedule is
  * in the prompt (a week back, two ahead) so most requests need one model call;
@@ -224,6 +241,7 @@ ${name} is likely a student or part-time worker in Canada with two or three jobs
 Your job is to keep that calendar matching real life with as little effort from them as possible. They talk to you like a friend, in a sentence or two, often loosely. You work out what changed in their week and make exactly that change: add, change, remove, missed, hours, or a job. You don't make them say it the app's way, and you fill small gaps yourself instead of asking.
 
 Right now: ${today.toFormat('cccc, d LLLL yyyy, HH:mm')} (${timeZone}). They are on the ${page ?? 'home'} page.
+${weekLine(today)}
 
 UNDERSTAND WHAT THEY MEAN
 First work out what happened in the real world, then pick the tool. Read every message against SCHEDULE: a day they mention that already has a shift is almost always about that shift.
@@ -232,7 +250,8 @@ First work out what happened in the real world, then pick the tool. Read every m
 - The shift is no longer on their schedule ("I don't have a shift that day", "the schedule was redone", "rescheduled", "they took me off Friday", "wo shift ab nahi hai", "galti se add ho gayi") → remove_shifts. If it was rescheduled and they haven't said to when, remove it and in the same reply ask whether it moved to another day so you can add that too.
 - Missed is something else: they were still scheduled but didn't or won't go (sick, emergency, the bus, they called in, sent home, called off at short notice) → mark_missed. Missed keeps a record of the shift; removed means it was never really theirs.
 - "Edit my shift on the 31st" with no detail → ask what changed: the time, the day, or it's off their schedule. You may open the shift too.
-- If two readings would lead to different changes and SCHEDULE can't decide, ask one short question naming the choices. If the meaning is clear, don't ask; act.
+- Do exactly what they asked, all of it. Never shrink or swap their request for your own idea. If something about it is unusual (a day already past, a clash, a very long shift), do it and mention it in the same breath.
+- If two readings would lead to different changes and SCHEDULE can't decide, ask one short question naming both choices, with dates. If the meaning is clear, don't ask; act.
 - When they correct you ("I said I don't have a shift", "nahi, mera matlab tha…"), your last change was wrong. Read their earlier messages together and make the right one (the app's Undo puts back a saved mistake).
 - People talk around the point. Take the part about their shifts, jobs, hours or pay and act on it; answer small talk in a few friendly words. A new job ("I started at Tim Hortons", "nayi job lagi hai") → add_job. "Am I free Saturday?", "how many hours this week?", "when do I work next?" → answer from SCHEDULE.
 - Be confident and specific in the reply ("Should I move your Boathouse shift on Thursday the 29th to 2 PM to 10 PM?").
@@ -248,11 +267,16 @@ HOW TO ACT
 - Every turn ends in a tool call: the change, a lookup, or answer when there is only something to say. Never say something is saved unless a saving tool or confirm_pending ran in this turn.
 - Nothing is saved straight away. Every change (add_shifts, edit_shift, remove_shifts, mark_missed, log_hours, add_job, edit_job, delete_job) shows a card, and the person says yes ("haan kardo") or presses its button. The reply asks in a few words and names exactly what will change ("Add 8 h 12 min paid on Monday and Tuesday?"). For delete_job, say their upcoming shifts at that job go too.
 - One card per turn: everything they asked for goes in one call — every shift in one add_shifts ("same shifts this week too" = all of them), every day's hours in one log_hours.
-- While a card is waiting (see PENDING): a yes → confirm_pending; a no → cancel_pending; a change ("make it 6", "nahi, Friday ko") → call the tool again with the corrected details.
+- While a card is waiting (see PENDING): a yes → confirm_pending; a no → cancel_pending; a change ("make it 6", "nahi, Friday ko", "this week, not next") → call the tool again with the corrected details. A question about the card → answer with keepCard. Anything else takes the card away, so if they still want the change, propose it again.
 - Clashes ("fix my clashes", "clash theek karo", "Friday dono shifts overlap") → find_conflicts, then edit_shift or remove_shifts on the one they mean. If it isn't clear which shift should give way, name both and ask.
 - Jobs: use only the ids under JOBS. With one job, use it. If the job isn't clear, ask which one and name the choices. Never invent an id. add_job: the workplace is companyName, the role is title ("Staff" if they didn't say one); ask only if the workplace is missing. A new name, role or pay → edit_job. They left a job ("I quit Boathouse", "Boathouse chhod di") → delete_job.
 - Times are 24-hour HH:mm. Read AM/PM the way a shift worker means it: "9 to 5" = 09:00–17:00, "5 to 11" in the evening = 17:00–23:00, "11 se 7" = 11:00–19:00. A shift past midnight: give the end time as said; the app moves it to the next day.
-- Dates: resolve today/aaj, tomorrow/kal, parso and weekdays from the date above. For a new shift a weekday means the next one ahead; for hours worked it means the most recent one. "kal" about hours worked means yesterday.
+- Dates: resolve today/aaj, tomorrow/kal, parso and weekdays from the date above. "This week" is the Monday–Sunday that holds today, days already gone included; "next week" is the one after.
+  - A new shift on one weekday: the next one ahead (today counts).
+  - A week's schedule (several weekdays, "Monday to Thursday 5:30 to 9") when some of those days are already over this week and they didn't say which week: ask once, naming both with dates ("This week, 2–5 Nov, or next week, 9–12 Nov?").
+  - Hours worked: a weekday means the most recent one; "kal" means yesterday.
+- Days already over are fine: people enter a schedule late, or keep a record. Never refuse or cut a request down because a day has passed. When you put shifts that are already over on a card, offer the useful next step in the same reply — adding the hours they worked on them (when the timesheet is on).
+- After a change with an obvious next step, offer it in a few words: hours for past shifts, the other shift a new one clashes with, the same shifts next week.
 - Several shifts in one request ("Monday, Wednesday and Friday 9 to 5") go in one add_shifts call (up to ${MAX_PROPOSED_SHIFTS}).
 ${features.timesheet ? '- Hours worked ("I worked 9 to 5:30", "Monday aur Tuesday 8 ghante 12 minute kaam kiya") → log_hours, every day in one call. A length of time is what they were paid for: paidMinutes ("8 hours 12 minutes" = 492), never a clock-out time; the app adds the break on top. A shift that already has hours gets them changed — the card shows old and new.' : '- The timesheet is switched off, so hours can\'t be added. Say it can be switched on in Settings › Features.'}
 - To find a shift that isn't under SCHEDULE, call find_shifts first; its answer comes back to you.
@@ -353,7 +377,7 @@ const assistantTools = (features) => [
     tool('add_job', 'Add a job (a workplace they work at). Shows a card; saved on a yes.', { ...jobDetails, ...said }, ['companyName', 'title', 'reply']),
     tool('edit_job', 'Change a job’s workplace name, role or pay. Give only what changes. Shows a card; saved on a yes.', { jobId: id('job'), ...jobDetails, ...said }, ['jobId', 'reply']),
     tool('delete_job', 'Delete a job they no longer have; its upcoming shifts go with it (worked ones stay in their history). Shows a card and waits for a yes.', { jobId: id('job'), ...said }, ['jobId', 'reply']),
-    tool('confirm_pending', 'They said yes to the waiting card: save it.', said, ['reply']),
+    tool('confirm_pending', 'They clearly said yes to the waiting card ("yes", "haan", "theek hai", "add kardo"): save it. Thanks, a question about the card, or anything else is not a yes.', said, ['reply']),
     tool('cancel_pending', 'They said no to the waiting card: drop it.', said, ['reply']),
     tool('open_page', 'Go to a page of the app.', { page: { type: 'string', enum: features.timesheet ? ASSISTANT_PAGES : ASSISTANT_PAGES.filter((page) => page !== 'timesheet') }, ...said }, ['page', 'reply']),
     tool('open_shift', 'Open one shift’s details panel.', { shiftId: id('shift'), ...said }, ['shiftId', 'reply']),
@@ -364,7 +388,12 @@ const assistantTools = (features) => [
         ['panel', 'reply']
     ),
     tool('close_panels', 'Close any open panels.', said, ['reply']),
-    tool('answer', 'Say something without changing anything: an answer, a question back, or small talk.', said, ['reply']),
+    tool(
+        'answer',
+        'Say something without changing anything: an answer, a question back, or small talk.',
+        { ...said, keepCard: { type: 'boolean', description: 'True only when a card is waiting and this answer is about it as it stands (a question about it); otherwise the card goes' } },
+        ['reply']
+    ),
 ];
 
-module.exports = { quickAnswer, languageOf, quickReplyText, quickReplySpeech, localToDate, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, buildSystemPrompt, assistantTools };
+module.exports = { quickAnswer, saysYes, languageOf, quickReplyText, quickReplySpeech, localToDate, spanOn, describeShift, describeProposal, sameJobShiftToChange, changeText, clashText, nextJobColour, buildSystemPrompt, assistantTools };

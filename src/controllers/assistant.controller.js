@@ -14,9 +14,15 @@ const sendVoice = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, turn, turn.heard ? 'Assistant replied' : 'Nothing was heard'));
 });
 
+const transcribeVoice = asyncHandler(async (req, res) => {
+    if (!req.file) throw new ApiError(400, 'No recording — send it as "audio" in form-data');
+    const result = await assistantService.transcribeRecording({ audio: req.file.buffer, mimeType: req.file.mimetype });
+    res.status(200).json(new ApiResponse(200, result, result.heard ? 'Heard' : 'Nothing was heard'));
+});
+
 const confirmProposal = asyncHandler(async (req, res) => {
     const saved = await assistantService.confirmProposal(req.user.id, req.body.proposal);
     res.status(200).json(new ApiResponse(200, saved, 'Saved'));
 });
 
-module.exports = { sendMessage, sendVoice, confirmProposal };
+module.exports = { sendMessage, sendVoice, transcribeVoice, confirmProposal };
