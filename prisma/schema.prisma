@@ -55,6 +55,9 @@ model User {
   sharesGiven   ShareGrant[] @relation("SharesGiven")
   sharesReceived ShareGrant[] @relation("SharesReceived")
 
+  assistantConversation AssistantConversation?
+  assistantNotes        AssistantNote[]
+
   @@index([deletionRequestedAt])
   @@map("users")
 }
@@ -213,4 +216,32 @@ enum Plan {
   FREE
   PRO
   TESTER
+}
+
+// The assistant conversation, kept only while "Remember assistant chats" is on
+// (constants/features.js) and for KEEP_CHATS_DAYS after the last message. One row per
+// user: the apps send the recent conversation as it is (lines, saved changes, Undo state).
+model AssistantConversation {
+  userId    String   @id
+  messages  Json
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([updatedAt])
+  @@map("assistant_conversations")
+}
+
+// What the assistant keeps so it needn't be told again: "INC = International Clothiers".
+// Only while "Remember assistant chats" is on; the person sees and deletes them in Settings.
+model AssistantNote {
+  id        String   @id @default(uuid())
+  userId    String
+  text      String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("assistant_notes")
 }

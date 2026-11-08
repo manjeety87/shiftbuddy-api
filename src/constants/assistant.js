@@ -33,7 +33,21 @@ const ASSISTANT_PANELS = ['newShift', 'newJob', 'addHours', 'paySummary', 'scan'
 // A job the assistant adds gets the first of these its owner isn't using yet (the app's job colours, web JobSheet)
 const JOB_COLOURS = ['#6B8F71', '#B85C4E', '#C99A3A', '#5B8A9A', '#9B7EBD', '#C77B8E', '#7A9E7E'];
 
+/** "Remember assistant chats": a conversation untouched this long is deleted (hourly) */
+const KEEP_CHATS_DAYS = 30;
+/** Lines kept per conversation — enough to scroll back through; the model reads the last 12 */
+const MAX_KEPT_MESSAGES = 100;
+const MAX_KEPT_TEXT = 2000;
+/** Notes the assistant keeps; a new one past this replaces the oldest */
+const MAX_NOTES = 30;
+const MAX_NOTE_LENGTH = 200;
+
 module.exports = {
+    KEEP_CHATS_DAYS,
+    MAX_KEPT_MESSAGES,
+    MAX_KEPT_TEXT,
+    MAX_NOTES,
+    MAX_NOTE_LENGTH,
     ASSISTANT_TURN_BUDGET_MS,
     TRANSCRIBE_BUDGET_MS,
     JOB_COLOURS,

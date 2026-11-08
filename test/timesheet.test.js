@@ -78,7 +78,7 @@ test('scheduled entry: the shift’s own times, with the usual break once it pas
 });
 
 test('features: unchosen ones are their defaults, unknown keys are dropped', () => {
-    assert.deepEqual(resolveFeatures({}), { leaveBy: true, weather: true, timesheet: false, pay: false, sharedOnHome: true, calendarSummary: true, autoHours: false });
+    assert.deepEqual(resolveFeatures({}), { leaveBy: true, weather: true, timesheet: false, pay: false, sharedOnHome: true, calendarSummary: true, autoHours: false, rememberChats: false });
     assert.equal(resolveFeatures(null).weather, true);
     const resolved = resolveFeatures({ timesheet: true, weather: false, junk: true, pay: 'yes' });
     assert.deepEqual([resolved.timesheet, resolved.weather, resolved.pay, 'junk' in resolved], [true, false, false, false]);

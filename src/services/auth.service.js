@@ -4,6 +4,7 @@ const appleSignin = require('apple-signin-auth');
 const prisma = require('../config/prisma');
 const { withUserLock } = require('../utils/withUserLock');
 const { resolveFeatures, mergeFeatures, addsHoursByItself } = require('../domain/features');
+const { forgetAll: forgetAssistantMemory } = require('./assistantMemory.service');
 const { addScheduledHours } = require('./timesheet.service');
 const env = require('../config/env');
 const ApiError = require('../utils/ApiError');
@@ -222,6 +223,8 @@ const updateProfile = async (userId, { features, ...data }) => {
         });
         // Just switched on: shifts already waiting for hours are filled in now, not at the next hourly run
         if (addsHoursByItself(resolveFeatures(user.features))) await addScheduledHours(userId);
+        // Switched off: what the assistant kept goes now, not in 30 days
+        if (features.rememberChats === false) await forgetAssistantMemory(userId);
     } else {
         user = await prisma.user.update({ where: { id: userId }, data });
     }

@@ -1,5 +1,5 @@
 const v = require('../../validation/assistant.validation');
-const { op, ok, errors, error } = require('../helpers');
+const { op, ok, errors, error, pathParam } = require('../helpers');
 
 const tag = 'Assistant';
 const PROPOSAL_TYPES = ['addShifts', 'editShift', 'removeShifts', 'markMissed', 'logHours', 'addJob', 'editJob', 'deleteJob', 'restoreJob', 'undoHours'];
@@ -88,6 +88,50 @@ module.exports = {
                 ...error(400, 'No recording, or not an audio type'),
                 ...turnErrors,
             },
+        }),
+    },
+    '/assistant/memory': {
+        get: op({
+            tag,
+            summary: 'What the assistant keeps (Remember assistant chats)',
+            description:
+                '`remember` is the Remember assistant chats feature (off by default); `decided` says whether the person ever chose, so the app ' +
+                'can ask once. While it is on: the kept conversation (empty after 30 days untouched) and the notes. While it is off, both are empty.',
+            responses: {
+                ...ok('The choice, the conversation and the notes', {
+                    type: 'object',
+                    properties: {
+                        remember: { type: 'boolean' },
+                        decided: { type: 'boolean' },
+                        messages: { type: 'array', items: { type: 'object', additionalProperties: true } },
+                        notes: { type: 'array', items: { type: 'object', properties: { id: { type: 'string', format: 'uuid' }, text: { type: 'string' }, createdAt: { type: 'string', format: 'date-time' } } } },
+                    },
+                }),
+            },
+        }),
+        delete: op({
+            tag,
+            summary: 'Delete the kept conversation and every note',
+            description: 'Also happens by itself when Remember assistant chats is switched off.',
+            responses: { ...ok('Deleted', { type: 'object', nullable: true }) },
+        }),
+    },
+    '/assistant/memory/conversation': {
+        put: op({
+            tag,
+            summary: 'Keep the recent conversation',
+            description: 'The app sends the conversation as it shows it (up to 100 lines); it replaces what was kept. 409 MEMORY_OFF while Remember assistant chats is off.',
+            body: v.keptConversationSchema,
+            responses: { ...ok('Kept', { type: 'object', nullable: true }), ...error(409, 'Remember assistant chats is off (MEMORY_OFF)') },
+        }),
+    },
+    '/assistant/memory/notes/{noteId}': {
+        delete: op({
+            tag,
+            summary: 'Delete one of the assistant’s notes',
+            description: 'One note the assistant kept (Settings › Features › Remember assistant chats lists them).',
+            params: [pathParam('noteId', 'A note from GET /assistant/memory')],
+            responses: { ...ok('Deleted', { type: 'object', nullable: true }), ...error(404, 'Not one of theirs') },
         }),
     },
     '/assistant/voice': {

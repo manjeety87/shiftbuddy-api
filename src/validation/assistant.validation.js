@@ -1,5 +1,5 @@
 const { z } = require('zod');
-const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_HISTORY, MAX_HISTORY_TEXT, MAX_PROPOSED_SHIFTS, ASSISTANT_PAGES } = require('../constants/assistant');
+const { MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_HISTORY, MAX_HISTORY_TEXT, MAX_PROPOSED_SHIFTS, ASSISTANT_PAGES, MAX_KEPT_MESSAGES, MAX_KEPT_TEXT } = require('../constants/assistant');
 const { MISSED_REASONS } = require('../constants/shifts');
 const { uuid, timeZone } = require('./common.validation');
 const { createJobSchema, updateJobSchema } = require('./job.validation');
@@ -117,4 +117,22 @@ const assistantVoiceSchema = z.object({
 // POST /assistant/confirm — the card's Save button
 const confirmProposalSchema = z.object({ proposal: proposalSchema });
 
-module.exports = { proposalSchema, assistantMessageSchema, assistantVoiceSchema, confirmProposalSchema };
+// PUT /assistant/memory/conversation — the recent conversation as the app shows it.
+// `saved` is what a line saved (its Undo is checked again when it is used, by /confirm).
+const keptConversationSchema = z.object({
+    messages: z
+        .array(
+            z.object({
+                id: z.number().int().nonnegative(),
+                role: z.enum(['user', 'assistant']),
+                text: z.string().max(MAX_KEPT_TEXT),
+                saved: z.record(z.string(), z.unknown()).optional(),
+                undone: z.boolean().optional(),
+            })
+        )
+        .max(MAX_KEPT_MESSAGES),
+});
+
+const noteParamsSchema = z.object({ noteId: uuid('Invalid note ID') });
+
+module.exports = { proposalSchema, assistantMessageSchema, assistantVoiceSchema, confirmProposalSchema, keptConversationSchema, noteParamsSchema };

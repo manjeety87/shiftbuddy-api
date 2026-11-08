@@ -19,6 +19,11 @@ const FEATURE_DEFAULTS = {
     calendarSummary: true,
     /** With the timesheet on: a finished shift's scheduled hours are added by themselves */
     autoHours: false,
+    /**
+     * The assistant keeps the conversation (on the account, for every device) and notes
+     * like "INC = International Clothiers". Off unless they choose it: it's their words.
+     */
+    rememberChats: false,
 };
 
 const FEATURE_KEYS = Object.keys(FEATURE_DEFAULTS);

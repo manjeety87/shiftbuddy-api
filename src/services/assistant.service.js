@@ -5,6 +5,7 @@ const { generateWithFallback } = require('../utils/gemini');
 const shiftService = require('./shift.service');
 const jobService = require('./job.service');
 const { findConflicts } = require('./conflict.service');
+const memoryService = require('./assistantMemory.service');
 const timesheetService = require('./timesheet.service');
 const { NOT_MISSED } = require('../constants/shifts');
 const { ASSISTANT_TURN_BUDGET_MS, TRANSCRIBE_BUDGET_MS, MAX_ASSISTANT_MESSAGE, MAX_ASSISTANT_STEPS, CONTEXT_DAYS_BEFORE, CONTEXT_DAYS_AFTER, MAX_CONTEXT_SHIFTS, MAX_LOOKUP_DAYS, MAX_LOOKUP_SHIFTS } = require('../constants/assistant');
@@ -48,7 +49,9 @@ const loadContext = async (userId, now, timeZone) => {
         }),
     ]);
     if (!user) throw new ApiError(401, 'User no longer exists');
-    return { user, features: resolveFeatures(user.features), jobs, shifts, shiftsById: new Map(shifts.map((shift) => [shift.id, shift])) };
+    const features = resolveFeatures(user.features);
+    const notes = features.rememberChats ? await memoryService.listNotes(userId) : [];
+    return { user, features, notes, jobs, shifts, shiftsById: new Map(shifts.map((shift) => [shift.id, shift])) };
 };
 
 /** One of their shifts, from the context if it's there, else the database (404 when not theirs). */
@@ -455,6 +458,11 @@ const TOOLS = {
     },
     open_panel: async (args) => ({ action: { type: 'openPanel', panel: args.panel } }),
     close_panels: async () => ({ action: { type: 'closePanels' } }),
+    remember_note: async (args, turn) => {
+        if (!turn.context.features.rememberChats) throw new Error('Remembering is switched off — tell them it can be switched on in Settings › Features');
+        await memoryService.addNote(turn.userId, args.text);
+        return {};
+    },
     // A question about the waiting card keeps it (checked again: it may no longer fit); anything else lets it go
     answer: async (args, turn) => (args.keepCard && turn.pending ? { card: await cardFor(turn.userId, turn.context, turn.pending).catch(() => null) } : {}),
 };
@@ -510,6 +518,7 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
                 shifts: context.shifts,
                 pendingText: describeProposal(pending, context, timeZone),
                 features: context.features,
+                notes: context.notes,
             }),
             tools: [{ functionDeclarations: assistantTools(context.features) }],
             // Always a tool call, plain answers included (`answer`): every reply then carries its `speech`

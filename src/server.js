@@ -4,6 +4,7 @@ const app = require('./app');
 const prisma = require('./config/prisma');
 const { schedulePurge } = require('./services/account.service');
 const { scheduleAutomaticHours } = require('./services/timesheet.service');
+const { scheduleConversationPurge } = require('./services/assistantMemory.service');
 
 // Requests still running when the host asks us to stop get this long to finish
 const SHUTDOWN_TIMEOUT_MS = 10 * 1000;
@@ -23,6 +24,8 @@ const server = app.listen(env.PORT, async () => {
     schedulePurge();
     // Finished shifts' scheduled hours, for people who chose to have them added by themselves
     scheduleAutomaticHours();
+    // Assistant conversations past their keeping time (Remember assistant chats)
+    scheduleConversationPurge();
   } catch (err) {
     const cause = err.message.split(/\r?\n/).filter(Boolean).pop();
     console.error('❌ Database connection failed — check DATABASE_URL in .env.', cause);

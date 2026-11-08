@@ -2,6 +2,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const ApiError = require('../utils/ApiError');
 const ApiResponse = require('../utils/ApiResponse');
 const assistantService = require('../services/assistant.service');
+const memoryService = require('../services/assistantMemory.service');
 
 const sendMessage = asyncHandler(async (req, res) => {
     const turn = await assistantService.respond(req.user.id, req.body);
@@ -25,4 +26,23 @@ const confirmProposal = asyncHandler(async (req, res) => {
     res.status(200).json(new ApiResponse(200, saved, 'Saved'));
 });
 
-module.exports = { sendMessage, sendVoice, transcribeVoice, confirmProposal };
+const getMemory = asyncHandler(async (req, res) => {
+    res.status(200).json(new ApiResponse(200, await memoryService.getMemory(req.user.id), 'Assistant memory'));
+});
+
+const keepConversation = asyncHandler(async (req, res) => {
+    await memoryService.keepConversation(req.user.id, req.body.messages);
+    res.status(200).json(new ApiResponse(200, null, 'Conversation kept'));
+});
+
+const forgetMemory = asyncHandler(async (req, res) => {
+    await memoryService.forgetAll(req.user.id);
+    res.status(200).json(new ApiResponse(200, null, 'Chats and notes deleted'));
+});
+
+const deleteNote = asyncHandler(async (req, res) => {
+    await memoryService.deleteNote(req.user.id, req.validated.params.noteId);
+    res.status(200).json(new ApiResponse(200, null, 'Note deleted'));
+});
+
+module.exports = { sendMessage, sendVoice, transcribeVoice, confirmProposal, getMemory, keepConversation, forgetMemory, deleteNote };
