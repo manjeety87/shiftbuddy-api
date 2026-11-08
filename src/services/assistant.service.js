@@ -575,9 +575,12 @@ const respond = async (userId, { message, history, pending, page, timeZone }) =>
 // The names Gemini reads. A phone's .m4a must go as audio/m4a: sent as audio/mp4 it hung for 30 s (tried 2026-10-27).
 const GEMINI_AUDIO_TYPE = { 'audio/mp4': 'audio/m4a', 'audio/x-m4a': 'audio/m4a', 'audio/x-wav': 'audio/wav', 'audio/mpeg': 'audio/mp3' };
 
-const TRANSCRIBE_PROMPT = `Write down exactly what the speaker says in this recording. They talk about their work shifts and may mix Hindi and English (Hinglish).
-- English words in English.
-- Hindi words in Roman letters, the way people text ("kal meri shift hai", "nahi ja paunga"), never Devanagari.
+// The script carries the language to the assistant, which answers in the same one: there is
+// no language switch in the apps, so English, Hinglish and Hindi must come out distinct
+const TRANSCRIBE_PROMPT = `Write down exactly what the speaker says in this recording. They talk about their work shifts in English, Hindi, or a mix of both (Hinglish).
+- English: in English.
+- Hinglish (Hindi mixed with English words or sentences): Roman letters, the way people text ("kal meri shift hai", "nahi ja paunga").
+- Only Hindi, with English at most for words like shift or job: Devanagari ("कल मेरी शिफ्ट है").
 - Numbers and times as digits ("9 se 5", "5:30").
 - No translation, no answer, no notes. If nothing clear is said, return an empty text.`;
 
